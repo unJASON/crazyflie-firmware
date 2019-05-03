@@ -138,7 +138,7 @@ static dwOps_t dwOps = {
   .spiSetSpeed = spiSetSpeed,
   .delayms = delayms,
 };
-
+//=============END: Low level ops for libdw===============//
 
 static void txCallback(dwDevice_t *dev)
 {
@@ -310,8 +310,10 @@ static void rxCallback(dwDevice_t *dev)
 //  return MAX_TIMEOUT;
 }
 
-static void UWBdistInit(dwDevice_t *dev)
+static void initiateRanging(dwDevice_t *dev)
 {
+  dwIdle(dev);
+
   // Initialize the packet in the TX buffer
   memset(&txPacket, 0, sizeof(txPacket));
   MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);
@@ -335,11 +337,6 @@ static void UWBdistInit(dwDevice_t *dev)
 
   dwSetReceiveWaitTimeout(dev, TWR_RECEIVE_TIMEOUT);
   dwCommitConfiguration(dev);
-}
-
-static void initiateRanging(dwDevice_t *dev)
-{
-  dwIdle(dev);
 
   txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_POLL;
   txPacket.payload[LPS_TWR_SEQ] = ++curr_seq;
@@ -352,6 +349,7 @@ static void initiateRanging(dwDevice_t *dev)
   dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
   dwWaitForResponse(dev, true);
   DEBUG_PRINT("to call dwStartTransmit\n");
+  return;
   dwStartTransmit(dev);
   DEBUG_PRINT("after call dwStartTransmit\n");
 }
@@ -364,10 +362,28 @@ static void rxTimeoutCallback(dwDevice_t * dev) {
 
 static void uwbTask(void* parameters)
 {
+  systemWaitStart();
+  //=========test dwStartTransmit =============
   vTaskDelay(5000/portTICK_PERIOD_MS);
+  dwDevice_t* dev=dwm;
+  packet_t txPacket;
+  memset(&txPacket, 0, sizeof(txPacket));
+  MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);
+  txPacket.pan = 0xbccf;
+  // no need to initialize RX buffer
+  dwSetReceiveWaitTimeout(dev, TWR_RECEIVE_TIMEOUT);
+  dwCommitConfiguration(dev);
+  dwNewTransmit(dev);
+  dwSetDefaults(dev);
+  dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
+  dwWaitForResponse(dev, true);
+  DEBUG_PRINT("test in Init: to call dwStartTransmit\n");
+  dwStartTransmit(dev);
+  DEBUG_PRINT("test in Init: after call dwStartTransmit\n");
+  //=========test dwStartTransmit =============
+
   while(1) {
     vTaskDelay(1000/portTICK_PERIOD_MS);
-    UWBdistInit(dwm);
     initiateRanging(dwm);
   }
 }
@@ -475,15 +491,12 @@ static bool uwbdistTest()
 
 static const DeckDriver uwbdist_deck = {
   .vid = 0xBC,
-  .pid = 0x06,
+  .pid = 0x06, //0x06,
   .name = "bcUWBdist",
 
   .usedGpio = 0,  // FIXME: set the used pins
-  #ifdef UWBDISTDECK_NO_LOW_INTERFERENCE
-  .requiredLowInterferenceRadioMode = false,
-  #else
+  .requiredEstimator = kalmanEstimator,
   .requiredLowInterferenceRadioMode = true,
-  #endif
 
   .init = uwbdistInit,
   .test = uwbdistTest,

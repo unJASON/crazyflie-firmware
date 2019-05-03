@@ -73,6 +73,9 @@ static volatile uint8_t curr_peer = 0; // last seq of the same type (rx, tx)
 static locoAddress_t uwb_peer_addrbase = 0xbccf000000000000;
 static uint8_t uwb_peer_id = 0; 
 
+float pressure, temperature, asl;
+bool pressure_ok;
+
 typedef struct {
   uint8_t pollRx[5];
   uint8_t answerTx[5];
@@ -83,9 +86,6 @@ typedef struct {
   float asl;
   uint8_t pressure_ok;
 } __attribute__((packed)) lpsTwrTagReportPayload_t;
-
-float pressure, temperature, asl;
-bool pressure_ok;
 
 //static uint32_t timeout; //TODO: check used for used in xSemaphoreTake(irqSemaphore, timeout/portTICK_PERIOD_MS)
 
@@ -310,14 +310,35 @@ static void rxCallback(dwDevice_t *dev)
 //  return MAX_TIMEOUT;
 }
 
-static void rxTimeoutCallback(dwDevice_t * dev) {
-  DEBUG_PRINT("rxTimeoutCallback\n");
-  initiateRanging(dev);
+static void UWBdistInit(dwDevice_t *dev)
+{
+  // Initialize the packet in the TX buffer
+  memset(&txPacket, 0, sizeof(txPacket));
+  MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);
+  txPacket.pan = 0xbccf;
+  // no need to initialize RX buffer
+
+  memset(&poll_tx, 0, sizeof(poll_tx));
+  memset(&poll_rx, 0, sizeof(poll_rx));
+  memset(&answer_tx, 0, sizeof(answer_tx));
+  memset(&answer_rx, 0, sizeof(answer_rx));
+  memset(&final_tx, 0, sizeof(final_tx));
+  memset(&final_rx, 0, sizeof(final_rx));
+
+  curr_seq = 0;
+  curr_peer = 0;
+
+  pressure = temperature = asl = 0;
+  pressure_ok = true;
+
+  uwb_peer_id = 0;
+
+  dwSetReceiveWaitTimeout(dev, TWR_RECEIVE_TIMEOUT);
+  dwCommitConfiguration(dev);
 }
 
 static void initiateRanging(dwDevice_t *dev)
 {
-  DEBUG_PRINT("initiateRanging begin\n");
   dwIdle(dev);
 
   txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_POLL;
@@ -329,18 +350,25 @@ static void initiateRanging(dwDevice_t *dev)
   dwNewTransmit(dev);
   dwSetDefaults(dev);
   dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
-
   dwWaitForResponse(dev, true);
+  DEBUG_PRINT("to call dwStartTransmit\n");
   dwStartTransmit(dev);
-  DEBUG_PRINT("initiateRanging end: dwSetData%d\n", MAC802154_HEADER_LENGTH+2);
+  DEBUG_PRINT("after call dwStartTransmit\n");
+}
+
+static void rxTimeoutCallback(dwDevice_t * dev) {
+  DEBUG_PRINT("rxTimeoutCallback\n");
+  return;
+  initiateRanging(dev);
 }
 
 static void uwbTask(void* parameters)
 {
-  return;
   vTaskDelay(5000/portTICK_PERIOD_MS);
   while(1) {
     vTaskDelay(1000/portTICK_PERIOD_MS);
+    UWBdistInit(dwm);
+    initiateRanging(dwm);
   }
 }
  

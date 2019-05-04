@@ -323,6 +323,7 @@ static void spiRead(dwDevice_t* dev, const void *header, size_t headerLength,
   spiEndTransaction();
 }
 
+#ifndef UWB_DIST_ENABLE
 #if LOCODECK_USE_ALT_PINS
 	void __attribute__((used)) EXTI5_Callback(void)
 #else
@@ -340,6 +341,7 @@ static void spiRead(dwDevice_t* dev, const void *header, size_t headerLength,
 	  if(xHigherPriorityTaskWoken)
 		portYIELD();
 	}
+#endif
 
 static void spiSetSpeed(dwDevice_t* dev, dwSpiSpeed_t speed)
 {
@@ -479,7 +481,11 @@ static bool dwm1000Test()
 
 static const DeckDriver dwm1000_deck = {
   .vid = 0xBC,
+  #ifdef UWB_DIST_ENABLE
+  .pid = 0x00,
+  #else
   .pid = 0x06,
+  #endif
   .name = "bcDWM1000",
 
   .usedGpio = 0,  // FIXME: set the used pins

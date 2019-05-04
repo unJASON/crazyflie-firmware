@@ -365,6 +365,16 @@ static void rxTimeoutCallback(dwDevice_t * dev) {
 
 static void uwbTask(void* parameters)
 {
+  #ifndef UWB_DIST_ENABLE
+  DEBUG_PRINT("UWB_DIST_ENABLE=0\n");
+  #else
+  DEBUG_PRINT("UWB_DIST_ENABLE=1\n");
+  #endif
+  #ifndef LPS_TDOA3_ENABLE
+  DEBUG_PRINT("LPS_TDOA3_ENABLE=0\n");
+  #else
+  DEBUG_PRINT("LPS_TDOA3_ENABLE=1\n");
+  #endif
   systemWaitStart();
   //=========test dwStartTransmit =============
   vTaskDelay(5000/portTICK_PERIOD_MS);

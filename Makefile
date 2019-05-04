@@ -25,6 +25,7 @@ PLATFORM          ?= cf2
 LPS_TDMA_ENABLE   ?= 0
 LPS_TDOA_ENABLE   ?= 0
 LPS_TDOA3_ENABLE  ?= 0
+UWB_DIST_ENABLE   ?= 0
 
 
 # Platform configuration handling
@@ -189,6 +190,14 @@ PROJ_OBJ += flowdeck_v1v2.o
 PROJ_OBJ += oa.o
 PROJ_OBJ += multiranger.o
 PROJ_OBJ += lighthouse.o
+
+ifeq ($(UWB_DIST_ENABLE), 1)
+PROJ_OBJ += uwbdistdeck.o
+endif
+
+ifeq ($(UWB_DIST_ENABLE), 1)
+CFLAGS += -DUWB_DIST_ENABLE
+endif
 
 ifeq ($(LPS_TDOA_ENABLE), 1)
 CFLAGS += -DLPS_TDOA_ENABLE

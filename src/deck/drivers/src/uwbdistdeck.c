@@ -24,23 +24,13 @@
 #define CS_PIN DECK_GPIO_IO1
 
 // UWB distance deck alternative IRQ and RESET pins(IO_2, IO_3) instead of default (RX1, TX1), leaving UART1 free for use
-#ifdef UWBDISTDECK_USE_ALT_PINS
-    #define GPIO_PIN_IRQ 	GPIO_Pin_5
-	#define GPIO_PIN_RESET 	GPIO_Pin_4
-	#define GPIO_PORT		GPIOB
-	#define EXTI_PortSource EXTI_PortSourceGPIOB
-	#define EXTI_PinSource 	EXTI_PinSource5
-	#define EXTI_LineN 		EXTI_Line5
-	#define EXTI_IRQChannel EXTI9_5_IRQn
-#else
-    #define GPIO_PIN_IRQ 	GPIO_Pin_11
+  #define GPIO_PIN_IRQ 	GPIO_Pin_11
 	#define GPIO_PIN_RESET 	GPIO_Pin_10
 	#define GPIO_PORT		GPIOC
 	#define EXTI_PortSource EXTI_PortSourceGPIOC
 	#define EXTI_PinSource 	EXTI_PinSource11
 	#define EXTI_LineN 		EXTI_Line11
 	#define EXTI_IRQChannel EXTI15_10_IRQn
-#endif
 
 #define DEFAULT_RX_TIMEOUT 10000
 
@@ -114,6 +104,20 @@ static void spiRead(dwDevice_t* dev, const void *header, size_t headerLength,
   digitalWrite(CS_PIN, HIGH);
   spiEndTransaction();
 }
+
+  void __attribute__((used)) EXTI11_Callback(void)
+	{
+	  portBASE_TYPE  xHigherPriorityTaskWoken = pdFALSE;
+
+	  NVIC_ClearPendingIRQ(EXTI_IRQChannel);
+	  EXTI_ClearITPendingBit(EXTI_LineN);
+
+	  //To unlock RadioTask
+	  xSemaphoreGiveFromISR(irqSemaphore, &xHigherPriorityTaskWoken);
+
+	  if(xHigherPriorityTaskWoken)
+		portYIELD();
+	}
 
 static void spiSetSpeed(dwDevice_t* dev, dwSpiSpeed_t speed)
 {
@@ -349,7 +353,6 @@ static void initiateRanging(dwDevice_t *dev)
   dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
   dwWaitForResponse(dev, true);
   DEBUG_PRINT("to call dwStartTransmit\n");
-  return;
   dwStartTransmit(dev);
   DEBUG_PRINT("after call dwStartTransmit\n");
 }

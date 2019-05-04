@@ -479,7 +479,7 @@ static bool dwm1000Test()
 
 static const DeckDriver dwm1000_deck = {
   .vid = 0xBC,
-  .pid = 0x00, //0x06,
+  .pid = 0x06,
   .name = "bcDWM1000",
 
   .usedGpio = 0,  // FIXME: set the used pins

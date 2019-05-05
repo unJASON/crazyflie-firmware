@@ -171,6 +171,7 @@ static void txCallback(dwDevice_t *dev)
 
 static void rxCallback(dwDevice_t *dev)
 {
+  DEBUG_PRINT("rxCallback begin\n");
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);
 
@@ -352,52 +353,51 @@ static void initiateRanging(dwDevice_t *dev)
   dwSetDefaults(dev);
   dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
   dwWaitForResponse(dev, true);
-  DEBUG_PRINT("to call dwStartTransmit\n");
   dwStartTransmit(dev);
-  DEBUG_PRINT("after call dwStartTransmit\n");
 }
 
 static void rxTimeoutCallback(dwDevice_t * dev) {
-  DEBUG_PRINT("rxTimeoutCallback\n");
+  DEBUG_PRINT("rxTimeoutCallback begin\n");
   return;
   initiateRanging(dev);
 }
 
 static void uwbTask(void* parameters)
 {
-  #ifndef UWB_DIST_ENABLE
-  DEBUG_PRINT("UWB_DIST_ENABLE=0\n");
-  #else
-  DEBUG_PRINT("UWB_DIST_ENABLE=1\n");
-  #endif
-  #ifndef LPS_TDOA3_ENABLE
-  DEBUG_PRINT("LPS_TDOA3_ENABLE=0\n");
-  #else
-  DEBUG_PRINT("LPS_TDOA3_ENABLE=1\n");
-  #endif
   systemWaitStart();
-  //=========test dwStartTransmit =============
-  vTaskDelay(5000/portTICK_PERIOD_MS);
-  dwDevice_t* dev=dwm;
-  packet_t txPacket;
-  memset(&txPacket, 0, sizeof(txPacket));
-  MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);
-  txPacket.pan = 0xbccf;
-  // no need to initialize RX buffer
-  dwSetReceiveWaitTimeout(dev, TWR_RECEIVE_TIMEOUT);
-  dwCommitConfiguration(dev);
-  dwNewTransmit(dev);
-  dwSetDefaults(dev);
-  dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
-  dwWaitForResponse(dev, true);
-  DEBUG_PRINT("test in Init: to call dwStartTransmit\n");
-  dwStartTransmit(dev);
-  DEBUG_PRINT("test in Init: after call dwStartTransmit\n");
-  //=========test dwStartTransmit =============
 
-  while(1) {
-    vTaskDelay(1000/portTICK_PERIOD_MS);
+  vTaskDelay(3000/portTICK_PERIOD_MS);
+  //initiateRanging(dwm);
+  /*
+  */
+  dwDevice_t* dev=dwm;
+  dwSetReceiveWaitTimeout(dwm, 65535);
+  dwCommitConfiguration(dwm);
+
+  while(0) {
     initiateRanging(dwm);
+    vTaskDelay(3000/portTICK_PERIOD_MS);
+  }
+  for(int i=0;i<300;i++) {
+    //vTaskDelay(3000/portTICK_PERIOD_MS);
+    DEBUG_PRINT("for i=%d\n",i);
+    if (xSemaphoreTake(irqSemaphore, 0/portTICK_PERIOD_MS)) {
+      do{
+        xSemaphoreTake(algoSemaphore, portMAX_DELAY);
+        DEBUG_PRINT("dwHandleInterrupt\n");
+        dwHandleInterrupt(dwm);
+        xSemaphoreGive(algoSemaphore);
+      } while(digitalRead(GPIO_PIN_IRQ) != 0);
+  dwNewReceive(dev);
+  dwSetDefaults(dev);
+        DEBUG_PRINT("to dwStartReceive\n");
+  dwStartReceive(dev);
+        DEBUG_PRINT("after dwStartReceive\n");
+    } else {
+      xSemaphoreTake(algoSemaphore, portMAX_DELAY);
+      DEBUG_PRINT("irqSemaphore timed out!\n");
+      xSemaphoreGive(algoSemaphore);
+    }
   }
 }
  
@@ -474,7 +474,6 @@ static void uwbdistInit(DeckInfo *info)
   dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
 
   dwSetReceiveWaitTimeout(dwm, DEFAULT_RX_TIMEOUT);
-
   dwCommitConfiguration(dwm);
 
   // Enable interrupt

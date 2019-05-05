@@ -22,7 +22,7 @@
 #define LPS_TWR_TYPE 0
 #define LPS_TWR_SEQ 1
 
-#define TWR_RECEIVE_TIMEOUT 1000
+#define TWR_RECEIVE_TIMEOUT 3000
 #define MAX_TIMEOUT portMAX_DELAY
 
 #endif // __UWBDISTDECK_H__

@@ -77,7 +77,7 @@ typedef struct {
   uint8_t pressure_ok;
 } __attribute__((packed)) lpsTwrTagReportPayload_t;
 
-//static uint32_t timeout; //TODO: check used for used in xSemaphoreTake(irqSemaphore, timeout/portTICK_PERIOD_MS)
+int uwb_dist_state=0;
 
 /************ Low level ops for libdw **********/
 static void spiWrite(dwDevice_t* dev, const void *header, size_t headerLength,
@@ -154,24 +154,27 @@ static void txCallback(dwDevice_t *dev)
     case LPS_TWR_POLL:
       DEBUG_PRINT("sent LPS_TWR_POLL\r\n");
       poll_tx = departure;
+      uwb_dist_state=2;
       break;
     case LPS_TWR_FINAL:
       DEBUG_PRINT("sent LPS_TWR_FINAL\r\n");
       final_tx = departure;
+      uwb_dist_state=0;
       break;
     case LPS_TWR_ANSWER:
       DEBUG_PRINT("sent LPS_TWR_ANSWER to %02x at %04x\r\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
       answer_tx = departure;
+      uwb_dist_state=4;
       break;
     case LPS_TWR_REPORT:
       DEBUG_PRINT("sent LPS_TWR_REPORT\r\n");
+      uwb_dist_state=0;
       break;
   }
 }
 
 static void rxCallback(dwDevice_t *dev)
 {
-  DEBUG_PRINT("rxCallback begin\n");
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);
 
@@ -202,15 +205,12 @@ static void rxCallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+payloadLength);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-
-      return;
       break;
 
     // Tag received messages
     case LPS_TWR_ANSWER:
-      if (rxPacket.payload[LPS_TWR_SEQ] != curr_seq) {
-        return;
-      }
+      DEBUG_PRINT("received LPS_TWR_ANSWER\r\n");
+      if (rxPacket.payload[LPS_TWR_SEQ] != curr_seq) return;
 
       txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_FINAL;
       txPacket.payload[LPS_TWR_SEQ] = rxPacket.payload[LPS_TWR_SEQ];
@@ -223,42 +223,35 @@ static void rxCallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-
-      return;
       break;
     case LPS_TWR_FINAL:
-      if (curr_peer == rxPacket.sourceAddress) {
-        lpsTwrTagReportPayload_t *report = (lpsTwrTagReportPayload_t *)(txPacket.payload+2);
+      DEBUG_PRINT("received LPS_TWR_FINAL\n");
+      if (curr_peer != rxPacket.sourceAddress) return;
 
-        DEBUG_PRINT("LPS_TWR_FINAL\r\n"); 
-        
-        arival.full -= (ANTENNA_DELAY/2);
-        final_rx = arival;
+      lpsTwrTagReportPayload_t *report = (lpsTwrTagReportPayload_t *)(txPacket.payload+2);
 
-        txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_REPORT;
-        txPacket.payload[LPS_TWR_SEQ] = rxPacket.payload[LPS_TWR_SEQ];
-        memcpy(&report->pollRx, &poll_rx, 5);
-        memcpy(&report->answerTx, &answer_tx, 5);
-        memcpy(&report->finalRx, &final_rx, 5);
-        report->pressure = pressure;
-        report->temperature = temperature;
-        report->asl = asl;
-        report->pressure_ok = pressure_ok;
+      arival.full -= (ANTENNA_DELAY/2);
+      final_rx = arival;
 
-        dwNewTransmit(dev);
-        dwSetDefaults(dev);
-        dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsTwrTagReportPayload_t));
-        dwWaitForResponse(dev, true);
-        dwStartTransmit(dev);
-      } else {//TODO: check if this else can be deleted
-        dwNewReceive(dev);
-        dwSetDefaults(dev);
-        dwStartReceive(dev);
-      }
-      return;
+      txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_REPORT;
+      txPacket.payload[LPS_TWR_SEQ] = rxPacket.payload[LPS_TWR_SEQ];
+      memcpy(&report->pollRx, &poll_rx, 5);
+      memcpy(&report->answerTx, &answer_tx, 5);
+      memcpy(&report->finalRx, &final_rx, 5);
+      report->pressure = pressure;
+      report->temperature = temperature;
+      report->asl = asl;
+      report->pressure_ok = pressure_ok;
+
+      dwNewTransmit(dev);
+      dwSetDefaults(dev);
+      dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsTwrTagReportPayload_t));
+      dwWaitForResponse(dev, true);
+      dwStartTransmit(dev);
       break;
     case LPS_TWR_REPORT:
     {
+      DEBUG_PRINT("received LPS_TWR_REPORT\n");
       lpsTwrTagReportPayload_t *report = (lpsTwrTagReportPayload_t *)(rxPacket.payload+2);
       double tround1, treply1, treply2, tround2, tprop_ctn, tprop;
 
@@ -278,7 +271,7 @@ static void rxCallback(dwDevice_t *dev)
       tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
 
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
-      DEBUG_PRINT("distance %0.2f\r\n",SPEED_OF_LIGHT * tprop);
+      DEBUG_PRINT("IMPORTANT: distance %0.2f\r\n",SPEED_OF_LIGHT * tprop);
       /*
       state.distance[current_anchor] = SPEED_OF_LIGHT * tprop;
       state.pressures[current_anchor] = report->asl;
@@ -308,7 +301,7 @@ static void rxCallback(dwDevice_t *dev)
 
       ranging_complete = true;
       */
-      return;
+      uwb_dist_state=0;
       break;
     }
   }
@@ -356,10 +349,10 @@ static void initiateRanging(dwDevice_t *dev)
   dwStartTransmit(dev);
 }
 
-static void rxTimeoutCallback(dwDevice_t * dev) {
-  DEBUG_PRINT("rxTimeoutCallback begin\n");
-  return;
-  initiateRanging(dev);
+static void setRadioInReceiveMode(dwDevice_t *dev) {
+  dwNewReceive(dev);
+  dwSetDefaults(dev);
+  dwStartReceive(dev);
 }
 
 static void uwbTask(void* parameters)
@@ -371,16 +364,25 @@ static void uwbTask(void* parameters)
   /*
   */
   dwDevice_t* dev=dwm;
-  dwSetReceiveWaitTimeout(dwm, 65535);
+  dwSetReceiveWaitTimeout(dwm, 65535);//delay 66ms
   dwCommitConfiguration(dwm);
+  int i=0;
+  uwb_dist_state=0;
 
-  while(0) {
-    initiateRanging(dwm);
-    vTaskDelay(3000/portTICK_PERIOD_MS);
-  }
-  for(int i=0;i<300;i++) {
-    //vTaskDelay(3000/portTICK_PERIOD_MS);
-    DEBUG_PRINT("for i=%d\n",i);
+  while(1) {
+    if(i>5) {i=0; uwb_dist_state=1;} else i++;
+    switch(uwb_dist_state) {
+      case 0:
+      case 2:
+      case 3:
+      case 4:
+        setRadioInReceiveMode(dev);
+        break;
+      case 1:
+        initiateRanging(dev);
+        uwb_dist_state = 2;
+        break;
+    }
     if (xSemaphoreTake(irqSemaphore, 0/portTICK_PERIOD_MS)) {
       do{
         xSemaphoreTake(algoSemaphore, portMAX_DELAY);
@@ -388,15 +390,6 @@ static void uwbTask(void* parameters)
         dwHandleInterrupt(dwm);
         xSemaphoreGive(algoSemaphore);
       } while(digitalRead(GPIO_PIN_IRQ) != 0);
-  dwNewReceive(dev);
-  dwSetDefaults(dev);
-        DEBUG_PRINT("to dwStartReceive\n");
-  dwStartReceive(dev);
-        DEBUG_PRINT("after dwStartReceive\n");
-    } else {
-      xSemaphoreTake(algoSemaphore, portMAX_DELAY);
-      DEBUG_PRINT("irqSemaphore timed out!\n");
-      xSemaphoreGive(algoSemaphore);
     }
   }
 }
@@ -457,7 +450,6 @@ static void uwbdistInit(DeckInfo *info)
 
   dwAttachSentHandler(dwm, txCallback);
   dwAttachReceivedHandler(dwm, rxCallback);
-  dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
 
   dwNewConfiguration(dwm);
   dwSetDefaults(dwm);

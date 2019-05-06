@@ -152,23 +152,19 @@ static void txCallback(dwDevice_t *dev)
 
   switch (txPacket.payload[0]) {
     case LPS_TWR_POLL:
-      DEBUG_PRINT("sent LPS_TWR_POLL\r\n");
+      DEBUG_PRINT("sent LPS_TWR_POLL\n");
       poll_tx = departure;
-      uwb_dist_state=2;
       break;
     case LPS_TWR_FINAL:
-      DEBUG_PRINT("sent LPS_TWR_FINAL\r\n");
+      DEBUG_PRINT("sent LPS_TWR_FINAL\n");
       final_tx = departure;
-      uwb_dist_state=0;
       break;
     case LPS_TWR_ANSWER:
-      DEBUG_PRINT("sent LPS_TWR_ANSWER to %02x at %04x\r\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
+      DEBUG_PRINT("sent LPS_TWR_ANSWER to %02x at %04x\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
       answer_tx = departure;
-      uwb_dist_state=4;
       break;
     case LPS_TWR_REPORT:
-      DEBUG_PRINT("sent LPS_TWR_REPORT\r\n");
-      uwb_dist_state=0;
+      DEBUG_PRINT("sent LPS_TWR_REPORT\n");
       break;
   }
 }
@@ -189,7 +185,6 @@ static void rxCallback(dwDevice_t *dev)
 
   switch(rxPacket.payload[LPS_TWR_TYPE]) {
     case LPS_TWR_POLL:
-      DEBUG_PRINT("POLL from %02x at %04x\r\n", (unsigned int)rxPacket.sourceAddress, (unsigned int)arival.low32);
 
       curr_peer = rxPacket.sourceAddress;
 
@@ -205,11 +200,13 @@ static void rxCallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+payloadLength);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
+      uwb_dist_state=4;
+  DEBUG_PRINT("case LPS_TWR_POLL:\n");
+  DEBUG_PRINT("uwb_dist_state=%d\n",uwb_dist_state);
       break;
 
     // Tag received messages
     case LPS_TWR_ANSWER:
-      DEBUG_PRINT("received LPS_TWR_ANSWER\r\n");
       if (rxPacket.payload[LPS_TWR_SEQ] != curr_seq) return;
 
       txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_FINAL;
@@ -223,9 +220,12 @@ static void rxCallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
+      DEBUG_PRINT("dwStartTransmit LPS_TWR_FINAL\n");
+      uwb_dist_state=3;
+  DEBUG_PRINT("case LPS_TWR_ANSWER: \n");
+  DEBUG_PRINT("uwb_dist_state=%d\n",uwb_dist_state);
       break;
     case LPS_TWR_FINAL:
-      DEBUG_PRINT("received LPS_TWR_FINAL\n");
       if (curr_peer != rxPacket.sourceAddress) return;
 
       lpsTwrTagReportPayload_t *report = (lpsTwrTagReportPayload_t *)(txPacket.payload+2);
@@ -248,6 +248,9 @@ static void rxCallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsTwrTagReportPayload_t));
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
+      uwb_dist_state=0;
+  DEBUG_PRINT("case LPS_TWR_FINAL: \n");
+  DEBUG_PRINT("uwb_dist_state=%d\n",uwb_dist_state);
       break;
     case LPS_TWR_REPORT:
     {
@@ -271,7 +274,7 @@ static void rxCallback(dwDevice_t *dev)
       tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
 
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
-      DEBUG_PRINT("IMPORTANT: distance %0.2f\r\n",SPEED_OF_LIGHT * tprop);
+      DEBUG_PRINT("IMPTANT: distance %0.2f\n",SPEED_OF_LIGHT * tprop);
       /*
       state.distance[current_anchor] = SPEED_OF_LIGHT * tprop;
       state.pressures[current_anchor] = report->asl;
@@ -302,6 +305,8 @@ static void rxCallback(dwDevice_t *dev)
       ranging_complete = true;
       */
       uwb_dist_state=0;
+  DEBUG_PRINT("case LPS_TWR_REPORT:\n"); 
+  DEBUG_PRINT("uwb_dist_state=%d\n",uwb_dist_state);
       break;
     }
   }
@@ -310,6 +315,7 @@ static void rxCallback(dwDevice_t *dev)
 
 static void initiateRanging(dwDevice_t *dev)
 {
+  DEBUG_PRINT("initiateRanging\n");
   dwIdle(dev);
 
   // Initialize the packet in the TX buffer
@@ -333,9 +339,6 @@ static void initiateRanging(dwDevice_t *dev)
 
   uwb_peer_id = 0;
 
-  dwSetReceiveWaitTimeout(dev, TWR_RECEIVE_TIMEOUT);
-  dwCommitConfiguration(dev);
-
   txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_POLL;
   txPacket.payload[LPS_TWR_SEQ] = ++curr_seq;
 
@@ -357,36 +360,35 @@ static void setRadioInReceiveMode(dwDevice_t *dev) {
 
 static void uwbTask(void* parameters)
 {
-  systemWaitStart();
-
-  vTaskDelay(3000/portTICK_PERIOD_MS);
-  //initiateRanging(dwm);
-  /*
-  */
   dwDevice_t* dev=dwm;
-  dwSetReceiveWaitTimeout(dwm, 65535);//delay 66ms
-  dwCommitConfiguration(dwm);
-  int i=0;
-  uwb_dist_state=0;
+  int time2wait=0;
+  dwSetReceiveWaitTimeout(dev, 3000);//~1ms
+  dwCommitConfiguration(dev);
 
+  systemWaitStart();
+  vTaskDelay(3000/portTICK_PERIOD_MS);
+  unsigned int i=0;
   while(1) {
-    if(i>5) {i=0; uwb_dist_state=1;} else i++;
+    if(i>2000) {i=0; uwb_dist_state=1;} else i++;
     switch(uwb_dist_state) {
       case 0:
       case 2:
       case 3:
       case 4:
         setRadioInReceiveMode(dev);
+        time2wait=1;
         break;
       case 1:
         initiateRanging(dev);
+        time2wait=10/portTICK_PERIOD_MS;
         uwb_dist_state = 2;
         break;
+      default:
+        time2wait=1/portTICK_PERIOD_MS;
     }
-    if (xSemaphoreTake(irqSemaphore, 0/portTICK_PERIOD_MS)) {
+    if (xSemaphoreTake(irqSemaphore, time2wait)) {
       do{
         xSemaphoreTake(algoSemaphore, portMAX_DELAY);
-        DEBUG_PRINT("dwHandleInterrupt\n");
         dwHandleInterrupt(dwm);
         xSemaphoreGive(algoSemaphore);
       } while(digitalRead(GPIO_PIN_IRQ) != 0);
@@ -439,7 +441,7 @@ static void uwbdistInit(DeckInfo *info)
   int result = dwConfigure(dwm);
   if (result != 0) {
     isInit = false;
-    DEBUG_PRINT("Failed to configure DW1000!\r\n");
+    DEBUG_PRINT("Failed to configure DW1000!\n");
     return;
   }
 

@@ -367,8 +367,14 @@ static void uwbTask(void* parameters)
 
   systemWaitStart();
   vTaskDelay(3000/portTICK_PERIOD_MS);
-  unsigned int i=0;
+  //unsigned int i=0;
   while(1) {
+        initiateRanging(dev);
+    vTaskDelay(3000/portTICK_PERIOD_MS);
+  }
+        setRadioInReceiveMode(dev);
+  while(1) {
+  #if 0
     if(i>2000) {i=0; uwb_dist_state=1;} else i++;
     switch(uwb_dist_state) {
       case 0:
@@ -386,6 +392,7 @@ static void uwbTask(void* parameters)
       default:
         time2wait=1/portTICK_PERIOD_MS;
     }
+  #endif
     if (xSemaphoreTake(irqSemaphore, time2wait)) {
       do{
         xSemaphoreTake(algoSemaphore, portMAX_DELAY);

@@ -25,7 +25,7 @@ PLATFORM          ?= cf2
 LPS_TDMA_ENABLE   ?= 0
 LPS_TDOA_ENABLE   ?= 0
 LPS_TDOA3_ENABLE  ?= 0
-UWB_DIST_ENABLE   ?= 1
+UWB_DIST_ENABLE   ?= 0
 
 
 # Platform configuration handling

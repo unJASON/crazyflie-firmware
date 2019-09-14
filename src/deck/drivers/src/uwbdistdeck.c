@@ -47,6 +47,8 @@ static uint8_t spiTxBuffer[196];
 static uint8_t spiRxBuffer[196];
 static uint16_t spiSpeed = SPI_BAUDRATE_2MHZ;
 
+static uint32_t timeout;
+
 // Timestamps for ranging
 static dwTime_t poll_tx;
 static dwTime_t poll_rx;
@@ -105,7 +107,11 @@ static void spiRead(dwDevice_t* dev, const void *header, size_t headerLength,
   spiEndTransaction();
 }
 
-  void __attribute__((used)) EXTI11_Callback(void)
+#if LOCODECK_USE_ALT_PINS
+	void __attribute__((used)) EXTI5_Callback(void)
+#else
+	void __attribute__((used)) EXTI11_Callback(void)
+#endif
 	{
 	  portBASE_TYPE  xHigherPriorityTaskWoken = pdFALSE;
 
@@ -182,6 +188,9 @@ static void rxCallback(dwDevice_t *dev)
 
   txPacket.destAddress = rxPacket.sourceAddress;
   txPacket.sourceAddress = rxPacket.destAddress;
+
+  DEBUG_PRINT("FROM %x TO %x:\t", (unsigned int)txPacket.sourceAddress, (unsigned int)txPacket.destAddress);
+  DEBUG_PRINT("TYPE=%d,\t SEQ=%d.\n", txPacket.payload[LPS_TWR_TYPE], txPacket.payload[LPS_TWR_SEQ]);
 
   switch(rxPacket.payload[LPS_TWR_TYPE]) {
     case LPS_TWR_POLL:
@@ -337,68 +346,40 @@ static void initiateRanging(dwDevice_t *dev)
   pressure = temperature = asl = 0;
   pressure_ok = true;
 
-  uwb_peer_id = 0;
+  uwb_peer_id = 4;
 
   txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_POLL;
   txPacket.payload[LPS_TWR_SEQ] = ++curr_seq;
 
   txPacket.sourceAddress = uwb_peer_addrbase|uwb_peer_id;
-  txPacket.destAddress = uwb_peer_addrbase|uwb_peer_id;
+  txPacket.destAddress = uwb_peer_addrbase;
 
   dwNewTransmit(dev);
   dwSetDefaults(dev);
   dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
   dwWaitForResponse(dev, true);
   dwStartTransmit(dev);
-}
-
-static void setRadioInReceiveMode(dwDevice_t *dev) {
-  dwNewReceive(dev);
-  dwSetDefaults(dev);
-  dwStartReceive(dev);
+  DEBUG_PRINT("FROM %x TO %x:\t", (unsigned int)txPacket.sourceAddress, (unsigned int)txPacket.destAddress);
+  DEBUG_PRINT("TYPE=%d,\t SEQ=%d.\n", txPacket.payload[LPS_TWR_TYPE], txPacket.payload[LPS_TWR_SEQ]);
 }
 
 static void uwbTask(void* parameters)
 {
   dwDevice_t* dev=dwm;
-  int time2wait=0;
-  dwSetReceiveWaitTimeout(dev, 3000);//~1ms
-  dwCommitConfiguration(dev);
 
   systemWaitStart();
-  vTaskDelay(3000/portTICK_PERIOD_MS);
-  //unsigned int i=0;
   while(1) {
-        initiateRanging(dev);
-    vTaskDelay(3000/portTICK_PERIOD_MS);
-  }
-        setRadioInReceiveMode(dev);
-  while(1) {
-  #if 0
-    if(i>2000) {i=0; uwb_dist_state=1;} else i++;
-    switch(uwb_dist_state) {
-      case 0:
-      case 2:
-      case 3:
-      case 4:
-        setRadioInReceiveMode(dev);
-        time2wait=1;
-        break;
-      case 1:
-        initiateRanging(dev);
-        time2wait=10/portTICK_PERIOD_MS;
-        uwb_dist_state = 2;
-        break;
-      default:
-        time2wait=1/portTICK_PERIOD_MS;
-    }
-  #endif
-    if (xSemaphoreTake(irqSemaphore, time2wait)) {
+    if (xSemaphoreTake(irqSemaphore, timeout/portTICK_PERIOD_MS)) {
       do{
         xSemaphoreTake(algoSemaphore, portMAX_DELAY);
         dwHandleInterrupt(dwm);
         xSemaphoreGive(algoSemaphore);
       } while(digitalRead(GPIO_PIN_IRQ) != 0);
+    } else {
+      xSemaphoreTake(algoSemaphore, portMAX_DELAY);
+      initiateRanging(dev);
+      timeout=3000;
+      xSemaphoreGive(algoSemaphore);
     }
   }
 }

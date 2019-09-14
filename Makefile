@@ -25,7 +25,7 @@ PLATFORM          ?= cf2
 LPS_TDMA_ENABLE   ?= 0
 LPS_TDOA_ENABLE   ?= 0
 LPS_TDOA3_ENABLE  ?= 0
-UWB_DIST_ENABLE   ?= 0
+UWB_DIST_ENABLE   ?= 1
 
 
 # Platform configuration handling
@@ -198,6 +198,8 @@ endif
 ifeq ($(UWB_DIST_ENABLE), 1)
 CFLAGS += -DUWB_DIST_ENABLE
 endif
+
+#CFLAGS += -DLOCODECK_USE_ALT_PINS
 
 ifeq ($(LPS_TDOA_ENABLE), 1)
 CFLAGS += -DLPS_TDOA_ENABLE

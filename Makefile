@@ -25,7 +25,7 @@ PLATFORM          ?= cf2
 LPS_TDMA_ENABLE   ?= 0
 LPS_TDOA_ENABLE   ?= 0
 LPS_TDOA3_ENABLE  ?= 0
-
+LPS_P2P_ENABLE    ?= 0
 
 # Platform configuration handling
 -include current_platform.mk
@@ -186,6 +186,7 @@ PROJ_OBJ += clockCorrectionEngine.o
 PROJ_OBJ += lpsTwrTag.o
 PROJ_OBJ += lpsTdoa2Tag.o
 PROJ_OBJ += lpsTdoa3Tag.o tdoaEngine.o tdoaStats.o tdoaStorage.o
+PROJ_OBJ += uwbp2pdist.o
 PROJ_OBJ += outlierFilter.o
 PROJ_OBJ += flowdeck_v1v2.o
 PROJ_OBJ += oa.o
@@ -199,6 +200,10 @@ endif
 
 ifeq ($(LPS_TDOA3_ENABLE), 1)
 CFLAGS += -DLPS_TDOA3_ENABLE
+endif
+
+ifeq ($(LPS_P2P_ENABLE), 1)
+CFLAGS += -DLPS_P2P_ENABLE
 endif
 
 ifeq ($(LPS_TDMA_ENABLE), 1)

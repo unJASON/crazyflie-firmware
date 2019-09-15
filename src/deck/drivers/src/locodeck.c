@@ -54,6 +54,7 @@
 #include "lpsTdoa2Tag.h"
 #include "lpsTdoa3Tag.h"
 #include "lpsTwrTag.h"
+#include "uwbp2pdist.h"
 
 
 #define CS_PIN DECK_GPIO_IO1
@@ -93,6 +94,8 @@ static lpsAlgoOptions_t algoOptions = {
   .userRequestedMode = lpsMode_TDoA2,
 #elif LPS_TDOA3_ENABLE
   .userRequestedMode = lpsMode_TDoA3,
+#elif LPS_P2P_ENABLE
+  .userRequestedMode = lpsMode_P2P,
 #elif defined(LPS_TWR_ENABLE)
   .userRequestedMode = lpsMode_TWR,
 #else
@@ -113,12 +116,15 @@ struct {
   [lpsMode_TWR] = {.algorithm = &uwbTwrTagAlgorithm, .name="TWR"},
   [lpsMode_TDoA2] = {.algorithm = &uwbTdoa2TagAlgorithm, .name="TDoA2"},
   [lpsMode_TDoA3] = {.algorithm = &uwbTdoa3TagAlgorithm, .name="TDoA3"},
+  [lpsMode_P2P] = {.algorithm = &uwbP2PDistAlgorithm, .name="P2P"},
 };
 
 #if LPS_TDOA_ENABLE
 static uwbAlgorithm_t *algorithm = &uwbTdoa2TagAlgorithm;
 #elif LPS_TDOA3_ENABLE
 static uwbAlgorithm_t *algorithm = &uwbTdoa3TagAlgorithm;
+#elif LPS_P2P_ENABLE
+static uwbAlgorithm_t *algorithm = &uwbP2PDistAlgorithm;
 #else
 static uwbAlgorithm_t *algorithm = &uwbTwrTagAlgorithm;
 #endif

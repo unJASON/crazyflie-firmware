@@ -36,6 +36,7 @@ static uint32_t timeout_p2p=65;
 
 static void txcallback(dwDevice_t *dev)
 {
+  return;
   dwTime_t departure;
   dwGetTransmitTimestamp(dev, &departure);
   departure.full += (ANTENNA_DELAY / 2);
@@ -61,6 +62,7 @@ static void txcallback(dwDevice_t *dev)
 
 static void rxcallback(dwDevice_t *dev)
 {
+  return;
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);
 
@@ -199,6 +201,7 @@ DEBUG_PRINT("d=%d\n",(int)(100*SPEED_OF_LIGHT * tprop));
 
 static void initiateRanging(dwDevice_t *dev)
 {
+  return;
   dwIdle(dev);
 
   memset(&poll_tx, 0, sizeof(poll_tx));
@@ -246,8 +249,6 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       return 1000;//timeout_p2p;
     case eventReceiveFailed:
       return 0;
-    default:
-      configASSERT(false);
   }
 
   return 1000;//timeout_p2p;
@@ -255,6 +256,7 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 
 static void p2pDistInit(dwDevice_t *dev)
 {
+  return;
   // Initialize the packet in the TX buffer
   memset(&txPacket, 0, sizeof(txPacket));
   MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);

@@ -31,7 +31,7 @@ float temperature = 0;
 float asl = 0;
 bool pressure_ok = true;
 
-static int timeout=3000;
+static uint32_t timeout_p2p=3000;
 
 
 static void txcallback(dwDevice_t *dev)
@@ -42,19 +42,19 @@ static void txcallback(dwDevice_t *dev)
 
   switch (txPacket.payload[0]) {
     case LPS_TWR_POLL:
-      DEBUG_PRINT("sent LPS_TWR_POLL\n");
+      //DEBUG_PRINT("sent LPS_TWR_POLL\n");
       poll_tx = departure;
       break;
     case LPS_TWR_FINAL:
-      DEBUG_PRINT("sent LPS_TWR_FINAL\n");
+      //DEBUG_PRINT("sent LPS_TWR_FINAL\n");
       final_tx = departure;
       break;
     case LPS_TWR_ANSWER:
-      DEBUG_PRINT("sent LPS_TWR_ANSWER to %02x at %04x\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
+      //DEBUG_PRINT("sent LPS_TWR_ANSWER to %02x at %04x\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
       answer_tx = departure;
       break;
     case LPS_TWR_REPORT:
-      DEBUG_PRINT("sent LPS_TWR_REPORT\n");
+      //DEBUG_PRINT("sent LPS_TWR_REPORT\n");
       break;
   }
 }
@@ -112,7 +112,6 @@ static void rxcallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-      DEBUG_PRINT("dwStartTransmit LPS_TWR_FINAL\n");
   DEBUG_PRINT("case LPS_TWR_ANSWER: \n");
       break;
     case LPS_TWR_FINAL:
@@ -139,11 +138,10 @@ static void rxcallback(dwDevice_t *dev)
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
   DEBUG_PRINT("case LPS_TWR_FINAL: \n");
-      timeout=2000; //2s is 1s earlier to sent next poll
+      timeout_p2p=2000; //2s is 1s earlier to sent next poll
       break;
     case LPS_TWR_REPORT:
     {
-      DEBUG_PRINT("received LPS_TWR_REPORT\n");
       lpsTwrTagReportPayload_t *report = (lpsTwrTagReportPayload_t *)(rxPacket.payload+2);
       double tround1, treply1, treply2, tround2, tprop_ctn, tprop;
 
@@ -197,7 +195,7 @@ static void rxcallback(dwDevice_t *dev)
       break;
     }
   }
-  //return timeout;
+  //return timeout_p2p;
 }
 
 static void initiateRanging(dwDevice_t *dev)
@@ -228,15 +226,16 @@ static void initiateRanging(dwDevice_t *dev)
 
   dwWaitForResponse(dev, true);
   dwStartTransmit(dev);
-  DEBUG_PRINT("FROM %x TO %x:\t", (unsigned int)txPacket.sourceAddress, (unsigned int)txPacket.destAddress);
-  DEBUG_PRINT("TYPE=%d,\t SEQ=%d.\n", txPacket.payload[LPS_TWR_TYPE], txPacket.payload[LPS_TWR_SEQ]);
+
+  //DEBUG_PRINT("FROM %x TO %x:\t", (unsigned int)txPacket.sourceAddress, (unsigned int)txPacket.destAddress);
+  //DEBUG_PRINT("TYPE=%d,\t SEQ=%d.\n", txPacket.payload[LPS_TWR_TYPE], txPacket.payload[LPS_TWR_SEQ]);
 }
 
 static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
   switch(event) {
     case eventPacketReceived:
-      timeout=3000;
+      timeout_p2p=3000;
       rxcallback(dev);
       break;
     case eventPacketSent:
@@ -246,14 +245,14 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       initiateRanging(dev);
       break;
     case eventReceiveTimeout:
+      return timeout_p2p;
     case eventReceiveFailed:
       return 0;
-      break;
     default:
       configASSERT(false);
   }
 
-  return timeout;
+  return timeout_p2p;
 }
 
 static void p2pDistInit(dwDevice_t *dev)

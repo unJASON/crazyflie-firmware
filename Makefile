@@ -25,7 +25,7 @@ PLATFORM          ?= cf2
 LPS_TDMA_ENABLE   ?= 0
 LPS_TDOA_ENABLE   ?= 0
 LPS_TDOA3_ENABLE  ?= 0
-LPS_P2P_ENABLE    ?= 0
+LPS_P2P_ENABLE    ?= 1
 
 # Platform configuration handling
 -include current_platform.mk

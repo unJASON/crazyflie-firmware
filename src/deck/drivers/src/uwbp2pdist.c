@@ -36,7 +36,6 @@ static uint32_t timeout_p2p=65;
 
 static void txcallback(dwDevice_t *dev)
 {
-  return;
   dwTime_t departure;
   dwGetTransmitTimestamp(dev, &departure);
   departure.full += (ANTENNA_DELAY / 2);
@@ -62,7 +61,6 @@ static void txcallback(dwDevice_t *dev)
 
 static uint32_t rxcallback(dwDevice_t *dev)
 {
-  return 0;
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);
 
@@ -201,7 +199,6 @@ DEBUG_PRINT("d=%d\n",(int)(100*SPEED_OF_LIGHT * tprop));
 
 static void initiateRanging(dwDevice_t *dev)
 {
-  return;
   dwIdle(dev);
 
   memset(&poll_tx, 0, sizeof(poll_tx));
@@ -217,8 +214,8 @@ static void initiateRanging(dwDevice_t *dev)
   pressure = temperature = asl = 0;
   pressure_ok = true;
 
-  txPacket.sourceAddress = 0xbccf000000000013;
-  txPacket.destAddress = 0xbccf000000000012;
+  txPacket.sourceAddress = 0xbccf000000000000 | 12;
+  txPacket.destAddress = 0xbccf000000000000 | 13;
   txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
   txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
 
@@ -246,12 +243,12 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       initiateRanging(dev);
       break;
     case eventReceiveTimeout:
-      return 1000;//timeout_p2p;
+      break;
     case eventReceiveFailed:
       return 0;
   }
 
-  return 1000;//timeout_p2p;
+  return timeout_p2p;
 }
 
 static void p2pDistInit(dwDevice_t *dev)

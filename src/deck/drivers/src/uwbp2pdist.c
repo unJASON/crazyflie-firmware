@@ -41,20 +41,20 @@ static void txcallback(dwDevice_t *dev)
   departure.full += (ANTENNA_DELAY / 2);
 
   switch (txPacket.payload[0]) {
-    case LPS_TWR_POLL:
-      //DEBUG_PRINT("sent LPS_TWR_POLL\n");
+    case LPS_P2P_POLL:
+      //DEBUG_PRINT("sent LPS_P2P_POLL\n");
       poll_tx = departure;
       break;
-    case LPS_TWR_FINAL:
-      //DEBUG_PRINT("sent LPS_TWR_FINAL\n");
+    case LPS_P2P_FINAL:
+      //DEBUG_PRINT("sent LPS_P2P_FINAL\n");
       final_tx = departure;
       break;
-    case LPS_TWR_ANSWER:
-      //DEBUG_PRINT("sent LPS_TWR_ANSWER to %02x at %04x\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
+    case LPS_P2P_ANSWER:
+      //DEBUG_PRINT("sent LPS_P2P_ANSWER to %02x at %04x\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
       answer_tx = departure;
       break;
-    case LPS_TWR_REPORT:
-      //DEBUG_PRINT("sent LPS_TWR_REPORT\n");
+    case LPS_P2P_REPORT:
+      //DEBUG_PRINT("sent LPS_P2P_REPORT\n");
       break;
   }
 }
@@ -76,14 +76,14 @@ static void rxcallback(dwDevice_t *dev)
 
   DEBUG_PRINT("F %x\n", (unsigned int)txPacket.destAddress);
 
-  switch(rxPacket.payload[LPS_TWR_TYPE]) {
-    case LPS_TWR_POLL:
+  switch(rxPacket.payload[LPS_P2P_TYPE]) {
+    case LPS_P2P_POLL:
 
       curr_peer = rxPacket.sourceAddress;
 
       int payloadLength = 2;
-      txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_ANSWER;
-      txPacket.payload[LPS_TWR_SEQ] = rxPacket.payload[LPS_TWR_SEQ];
+      txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_ANSWER;
+      txPacket.payload[LPS_P2P_SEQ] = rxPacket.payload[LPS_P2P_SEQ];
 
       arival.full -= (ANTENNA_DELAY/2);
       poll_rx = arival;
@@ -93,15 +93,15 @@ static void rxcallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+payloadLength);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-  DEBUG_PRINT("POLL\n");
+//DEBUG_PRINT("POLL\n");
       break;
 
     // Tag received messages
-    case LPS_TWR_ANSWER:
-      if (rxPacket.payload[LPS_TWR_SEQ] != curr_seq) return;
+    case LPS_P2P_ANSWER:
+      if (rxPacket.payload[LPS_P2P_SEQ] != curr_seq) return;
 
-      txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_FINAL;
-      txPacket.payload[LPS_TWR_SEQ] = rxPacket.payload[LPS_TWR_SEQ];
+      txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_FINAL;
+      txPacket.payload[LPS_P2P_SEQ] = rxPacket.payload[LPS_P2P_SEQ];
 
       arival.full -= (ANTENNA_DELAY / 2);
       answer_rx = arival;
@@ -111,18 +111,18 @@ static void rxcallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-  DEBUG_PRINT("ANS\n");
+//DEBUG_PRINT("ANS\n");
       break;
-    case LPS_TWR_FINAL:
+    case LPS_P2P_FINAL:
       if (curr_peer != rxPacket.sourceAddress) return;
 
-      lpsTwrTagReportPayload_t *report = (lpsTwrTagReportPayload_t *)(txPacket.payload+2);
+      lpsp2pTagReportPayload_t *report = (lpsp2pTagReportPayload_t *)(txPacket.payload+2);
 
       arival.full -= (ANTENNA_DELAY/2);
       final_rx = arival;
 
-      txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_REPORT;
-      txPacket.payload[LPS_TWR_SEQ] = rxPacket.payload[LPS_TWR_SEQ];
+      txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_REPORT;
+      txPacket.payload[LPS_P2P_SEQ] = rxPacket.payload[LPS_P2P_SEQ];
       memcpy(&report->pollRx, &poll_rx, 5);
       memcpy(&report->answerTx, &answer_tx, 5);
       memcpy(&report->finalRx, &final_rx, 5);
@@ -133,18 +133,18 @@ static void rxcallback(dwDevice_t *dev)
 
       dwNewTransmit(dev);
       dwSetDefaults(dev);
-      dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsTwrTagReportPayload_t));
+      dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsp2pTagReportPayload_t));
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-  DEBUG_PRINT("FIN\n");
-      timeout_p2p=50; //2s is 1s earlier to sent next poll
+//DEBUG_PRINT("FIN\n");
+      timeout_p2p=50; //set a shorter delay to sent next poll
       break;
-    case LPS_TWR_REPORT:
+    case LPS_P2P_REPORT:
     {
-      lpsTwrTagReportPayload_t *report = (lpsTwrTagReportPayload_t *)(rxPacket.payload+2);
+      lpsp2pTagReportPayload_t *report = (lpsp2pTagReportPayload_t *)(rxPacket.payload+2);
       double tround1, treply1, treply2, tround2, tprop_ctn, tprop;
 
-      if (rxPacket.payload[LPS_TWR_SEQ] != curr_seq) {
+      if (rxPacket.payload[LPS_P2P_SEQ] != curr_seq) {
         return;
       }
 
@@ -160,7 +160,7 @@ static void rxcallback(dwDevice_t *dev)
       tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
 
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
-      DEBUG_PRINT("dist=%0.2f\n",SPEED_OF_LIGHT * tprop);
+DEBUG_PRINT("d=%d\n",(int)(100*SPEED_OF_LIGHT * tprop));
       /*
       state.distance[current_anchor] = SPEED_OF_LIGHT * tprop;
       state.pressures[current_anchor] = report->asl;
@@ -190,7 +190,7 @@ static void rxcallback(dwDevice_t *dev)
 
       ranging_complete = true;
       */
-  DEBUG_PRINT("REPT\n"); 
+//DEBUG_PRINT("REPT\n"); 
       break;
     }
   }
@@ -216,8 +216,8 @@ static void initiateRanging(dwDevice_t *dev)
 
   txPacket.sourceAddress = 0xbccf000000000013;
   txPacket.destAddress = 0xbccf000000000012;
-  txPacket.payload[LPS_TWR_TYPE] = LPS_TWR_POLL;
-  txPacket.payload[LPS_TWR_SEQ] = ++curr_seq;
+  txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
+  txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
 
   dwNewTransmit(dev);
   dwSetDefaults(dev);
@@ -243,14 +243,14 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       initiateRanging(dev);
       break;
     case eventReceiveTimeout:
-      return timeout_p2p;
+      return 1000;//timeout_p2p;
     case eventReceiveFailed:
       return 0;
     default:
       configASSERT(false);
   }
 
-  return timeout_p2p;
+  return 1000;//timeout_p2p;
 }
 
 static void p2pDistInit(dwDevice_t *dev)
@@ -261,7 +261,6 @@ static void p2pDistInit(dwDevice_t *dev)
   txPacket.pan = 0xbccf;
 
   dwSetReceiveWaitTimeout(dev, 0xffff);
-
   dwCommitConfiguration(dev);
 }
 

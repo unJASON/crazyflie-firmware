@@ -266,7 +266,29 @@ static void p2pDistInit(dwDevice_t *dev)
   dwCommitConfiguration(dev);
 }
 
+static bool isRangingOk()
+{
+  return true;
+}
+
+point_t anchorPosition[2];
+static bool getAnchorPosition(const uint8_t anchorId, point_t* position) {
+    *position = anchorPosition[anchorId];
+    return true;
+}
+
+static uint8_t getAnchorIdList(uint8_t unorderedAnchorList[], const int maxListSize) {
+  return 2;
+}
+
+static uint8_t getActiveAnchorIdList(uint8_t unorderedAnchorList[], const int maxListSize) {
+  return 2;
+}
 uwbAlgorithm_t uwbP2PDistAlgorithm = {
   .init = p2pDistInit,
   .onEvent = p2pDistOnEvent,
+  .isRangingOk = isRangingOk,
+  .getAnchorPosition = getAnchorPosition,
+  .getAnchorIdList = getAnchorIdList,
+  .getActiveAnchorIdList = getActiveAnchorIdList,
 };

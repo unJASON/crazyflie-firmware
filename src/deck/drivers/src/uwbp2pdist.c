@@ -30,6 +30,8 @@ float pressure = 0;
 float temperature = 0;
 float asl = 0;
 bool pressure_ok = true;
+int ertcnt = 20;
+int cntout = 0;
 
 static uint32_t timeout_p2p=65;
 
@@ -93,7 +95,7 @@ static uint32_t rxcallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+payloadLength);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-//DEBUG_PRINT("POLL\n");
+DEBUG_PRINT("POLL\n");
       break;
 
     // Tag received messages
@@ -111,7 +113,7 @@ static uint32_t rxcallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-//DEBUG_PRINT("ANS\n");
+DEBUG_PRINT("ANS\n");
       break;
     case LPS_P2P_FINAL:
       if (curr_peer != rxPacket.sourceAddress) return 0;
@@ -136,8 +138,8 @@ static uint32_t rxcallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsp2pTagReportPayload_t));
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-//DEBUG_PRINT("FIN\n");
-      timeout_p2p=50; //set a shorter delay to sent next poll
+DEBUG_PRINT("FIN\n");
+      cntout=15; //set a shorter delay to sent next poll
       break;
     case LPS_P2P_REPORT:
     {
@@ -190,7 +192,7 @@ DEBUG_PRINT("d=%d\n",(int)(100*SPEED_OF_LIGHT * tprop));
 
       ranging_complete = true;
       */
-//DEBUG_PRINT("REPT\n"); 
+DEBUG_PRINT("REPT\n"); 
       break;
     }
   }
@@ -214,8 +216,8 @@ static void initiateRanging(dwDevice_t *dev)
   pressure = temperature = asl = 0;
   pressure_ok = true;
 
-  txPacket.sourceAddress = 0xbccf000000000000 | 12;
-  txPacket.destAddress = 0xbccf000000000000 | 13;
+  txPacket.sourceAddress = 0xbccf000000000000 | 13;
+  txPacket.destAddress = 0xbccf000000000000 | 12;
   txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
   txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
 
@@ -233,16 +235,22 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
   switch(event) {
     case eventPacketReceived:
-      timeout_p2p=65;
+      cntout=20;
       rxcallback(dev);
       break;
     case eventPacketSent:
       txcallback(dev);
       break;
+    case eventReceiveTimeout:
+      dwNewReceive(dev);
+      dwSetDefaults(dev);
+      dwStartReceive(dev);
+      if(++ertcnt>cntout)
+        ertcnt=0;
+      else 
+        break;
     case eventTimeout:  // Comes back to timeout after each ranging attempt
       initiateRanging(dev);
-      break;
-    case eventReceiveTimeout:
       break;
     case eventReceiveFailed:
       return 0;

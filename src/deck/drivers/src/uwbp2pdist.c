@@ -60,14 +60,14 @@ static void txcallback(dwDevice_t *dev)
   }
 }
 
-static void rxcallback(dwDevice_t *dev)
+static uint32_t rxcallback(dwDevice_t *dev)
 {
-  return;
+  return 0;
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);
 
   int dataLength = dwGetDataLength(dev);
-  if (dataLength == 0) return;
+  if (dataLength == 0) return 0;
 
   packet_t rxPacket;
   memset(&rxPacket, 0, MAC802154_HEADER_LENGTH);
@@ -100,7 +100,7 @@ static void rxcallback(dwDevice_t *dev)
 
     // Tag received messages
     case LPS_P2P_ANSWER:
-      if (rxPacket.payload[LPS_P2P_SEQ] != curr_seq) return;
+      if (rxPacket.payload[LPS_P2P_SEQ] != curr_seq) return 0;
 
       txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_FINAL;
       txPacket.payload[LPS_P2P_SEQ] = rxPacket.payload[LPS_P2P_SEQ];
@@ -116,7 +116,7 @@ static void rxcallback(dwDevice_t *dev)
 //DEBUG_PRINT("ANS\n");
       break;
     case LPS_P2P_FINAL:
-      if (curr_peer != rxPacket.sourceAddress) return;
+      if (curr_peer != rxPacket.sourceAddress) return 0;
 
       lpsp2pTagReportPayload_t *report = (lpsp2pTagReportPayload_t *)(txPacket.payload+2);
 
@@ -147,7 +147,7 @@ static void rxcallback(dwDevice_t *dev)
       double tround1, treply1, treply2, tround2, tprop_ctn, tprop;
 
       if (rxPacket.payload[LPS_P2P_SEQ] != curr_seq) {
-        return;
+        return 0;
       }
 
       memcpy(&poll_rx, &report->pollRx, 5);
@@ -196,7 +196,7 @@ DEBUG_PRINT("d=%d\n",(int)(100*SPEED_OF_LIGHT * tprop));
       break;
     }
   }
-  //return timeout_p2p;
+  return timeout_p2p;
 }
 
 static void initiateRanging(dwDevice_t *dev)

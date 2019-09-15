@@ -33,6 +33,7 @@ bool pressure_ok = true;
 int ertcnt = 20;
 int cntout = 0;
 
+static float distance = 0;
 static uint32_t timeout_p2p=65;
 
 
@@ -76,10 +77,11 @@ static uint32_t rxcallback(dwDevice_t *dev)
   txPacket.destAddress = rxPacket.sourceAddress;
   txPacket.sourceAddress = rxPacket.destAddress;
 
-  DEBUG_PRINT("F %x\n", (unsigned int)txPacket.destAddress);
+  DEBUG_PRINT("F %d\t", (unsigned int)txPacket.destAddress);
 
   switch(rxPacket.payload[LPS_P2P_TYPE]) {
     case LPS_P2P_POLL:
+DEBUG_PRINT("POLL\n");
 
       curr_peer = rxPacket.sourceAddress;
 
@@ -95,11 +97,11 @@ static uint32_t rxcallback(dwDevice_t *dev)
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+payloadLength);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-DEBUG_PRINT("POLL\n");
       break;
 
     // Tag received messages
     case LPS_P2P_ANSWER:
+DEBUG_PRINT("ANS\n");
       if (rxPacket.payload[LPS_P2P_SEQ] != curr_seq) return 0;
 
       txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_FINAL;
@@ -113,10 +115,10 @@ DEBUG_PRINT("POLL\n");
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-DEBUG_PRINT("ANS\n");
       break;
     case LPS_P2P_FINAL:
-      if (curr_peer != rxPacket.sourceAddress) return 0;
+DEBUG_PRINT("FIN\n");
+      //if (curr_peer != rxPacket.sourceAddress) return 0;
 
       lpsp2pTagReportPayload_t *report = (lpsp2pTagReportPayload_t *)(txPacket.payload+2);
 
@@ -138,11 +140,11 @@ DEBUG_PRINT("ANS\n");
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsp2pTagReportPayload_t));
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-DEBUG_PRINT("FIN\n");
       cntout=15; //set a shorter delay to sent next poll
       break;
     case LPS_P2P_REPORT:
     {
+DEBUG_PRINT("REPT\n"); 
       lpsp2pTagReportPayload_t *report = (lpsp2pTagReportPayload_t *)(rxPacket.payload+2);
       double tround1, treply1, treply2, tround2, tprop_ctn, tprop;
 
@@ -162,7 +164,8 @@ DEBUG_PRINT("FIN\n");
       tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
 
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
-DEBUG_PRINT("d=%d\n",(int)(100*SPEED_OF_LIGHT * tprop));
+      distance = SPEED_OF_LIGHT * tprop
+//DEBUG_PRINT("d=%d\n",(int)(100*distance));
       /*
       state.distance[current_anchor] = SPEED_OF_LIGHT * tprop;
       state.pressures[current_anchor] = report->asl;
@@ -192,7 +195,6 @@ DEBUG_PRINT("d=%d\n",(int)(100*SPEED_OF_LIGHT * tprop));
 
       ranging_complete = true;
       */
-DEBUG_PRINT("REPT\n"); 
       break;
     }
   }
@@ -216,8 +218,8 @@ static void initiateRanging(dwDevice_t *dev)
   pressure = temperature = asl = 0;
   pressure_ok = true;
 
-  txPacket.sourceAddress = 0xbccf000000000000 | 13;
-  txPacket.destAddress = 0xbccf000000000000 | 12;
+  txPacket.sourceAddress = 0xbccf000000000000 | 12;
+  txPacket.destAddress = 0xbccf000000000000 | 13;
   txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
   txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
 
@@ -297,3 +299,7 @@ uwbAlgorithm_t uwbP2PDistAlgorithm = {
   .getAnchorIdList = getAnchorIdList,
   .getActiveAnchorIdList = getActiveAnchorIdList,
 };
+
+LOG_GROUP_START(p2p)
+LOG_ADD(LOG_FLOAT, distance2peer, distance)
+LOG_GROUP_STOP(p2p)

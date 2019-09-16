@@ -34,7 +34,8 @@ float asl = 0;
 bool pressure_ok = true;
 
 static float pdistance = 0;
-static uint32_t timeout_p2p=60;
+static uint32_t timeout_p2p=0;
+static uint32_t default_twr_interval=10000;
 
 
 static void txcallback(dwDevice_t *dev)
@@ -140,7 +141,7 @@ DEBUG_PRINT("FIN\n");
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsp2pTagReportPayload_t));
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-      timeout_p2p=50; //set a shorter delay to sent next poll
+      timeout_p2p = default_twr_interval/2; //set a shorter delay to sent next poll
       break;
     case LPS_P2P_REPORT:
     {
@@ -166,6 +167,9 @@ DEBUG_PRINT("REPT\n");
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
       pdistance = SPEED_OF_LIGHT * tprop;
 DEBUG_PRINT("d=%d\n",(int)(100*pdistance));
+      dwNewReceive(dev);
+      dwSetDefaults(dev);
+      dwStartReceive(dev);
       break;
     }
   }
@@ -189,8 +193,8 @@ static void initiateRanging(dwDevice_t *dev)
   pressure = temperature = asl = 0;
   pressure_ok = true;
 
-  txPacket.sourceAddress = 0xbccf000000000000 | 13;
-  txPacket.destAddress = 0xbccf000000000000 | 12;
+  txPacket.sourceAddress = 0xbccf000000000000 | 12;
+  txPacket.destAddress = 0xbccf000000000000 | 13;
   txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
   txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
 
@@ -208,7 +212,7 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
   switch(event) {
     case eventPacketReceived:
-      timeout_p2p=60;
+      timeout_p2p=default_twr_interval;
       rxcallback(dev);
       break;
     case eventPacketSent:
@@ -218,9 +222,11 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       dwNewReceive(dev);
       dwSetDefaults(dev);
       dwStartReceive(dev);
+      timeout_p2p = (timeout_p2p>MAX_UWB_RECEIVE_TIMEOUT ? timeout_p2p-MAX_UWB_RECEIVE_TIMEOUT : 0) ;
       break;
     case eventTimeout:  // Comes back to timeout after each ranging attempt
       initiateRanging(dev);
+      timeout_p2p=default_twr_interval;
       break;
     case eventReceiveFailed:
       return 0;
@@ -237,7 +243,7 @@ static void p2pDistInit(dwDevice_t *dev)
   MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);
   txPacket.pan = 0xbccf;
 
-  dwSetReceiveWaitTimeout(dev, 0xffff);
+  dwSetReceiveWaitTimeout(dev, 0);
   dwCommitConfiguration(dev);
 }
 

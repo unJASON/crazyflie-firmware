@@ -35,8 +35,7 @@ bool pressure_ok = true;
 
 static float pdistance = 0;
 static uint32_t timeout_p2p=0;
-static uint32_t default_twr_interval=10000;
-
+static uint32_t default_twr_interval=8000;
 
 static void txcallback(dwDevice_t *dev)
 {
@@ -212,19 +211,23 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
   switch(event) {
     case eventPacketReceived:
+      DEBUG_PRINT("ePR\n"),
       timeout_p2p=default_twr_interval;
       rxcallback(dev);
       break;
     case eventPacketSent:
+      DEBUG_PRINT("ePS\n"),
       txcallback(dev);
       break;
     case eventReceiveTimeout:
+      DEBUG_PRINT("eRT\n"),
       dwNewReceive(dev);
       dwSetDefaults(dev);
       dwStartReceive(dev);
       timeout_p2p = (timeout_p2p>MAX_UWB_RECEIVE_TIMEOUT ? timeout_p2p-MAX_UWB_RECEIVE_TIMEOUT : 0) ;
       break;
     case eventTimeout:  // Comes back to timeout after each ranging attempt
+      DEBUG_PRINT("eT\n"),
       initiateRanging(dev);
       timeout_p2p=default_twr_interval;
       break;

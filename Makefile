@@ -210,6 +210,8 @@ ifeq ($(LPS_TDMA_ENABLE), 1)
 CFLAGS += -DLPS_TDMA_ENABLE
 endif
 
+CFLAGS += -DLOCODECK_USE_ALT_PINS
+
 ifdef SENSORS
 SENSORS_UPPER = $(shell echo $(SENSORS) | tr a-z A-Z)
 CFLAGS += -DSENSORS_FORCE=SensorImplementation_$(SENSORS)

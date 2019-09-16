@@ -7,6 +7,8 @@
 #include "task.h"
 
 #include "debug.h"
+#include "log.h"
+#include "crtp_localization_service.h"
 
 #include "physicalConstants.h"
 
@@ -30,11 +32,9 @@ float pressure = 0;
 float temperature = 0;
 float asl = 0;
 bool pressure_ok = true;
-int ertcnt = 20;
-int cntout = 0;
 
-static float distance = 0;
-static uint32_t timeout_p2p=65;
+static float pdistance = 0;
+static uint32_t timeout_p2p=60;
 
 
 static void txcallback(dwDevice_t *dev)
@@ -140,7 +140,7 @@ DEBUG_PRINT("FIN\n");
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsp2pTagReportPayload_t));
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
-      cntout=15; //set a shorter delay to sent next poll
+      timeout_p2p=50; //set a shorter delay to sent next poll
       break;
     case LPS_P2P_REPORT:
     {
@@ -164,37 +164,8 @@ DEBUG_PRINT("REPT\n");
       tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
 
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
-      distance = SPEED_OF_LIGHT * tprop
-//DEBUG_PRINT("d=%d\n",(int)(100*distance));
-      /*
-      state.distance[current_anchor] = SPEED_OF_LIGHT * tprop;
-      state.pressures[current_anchor] = report->asl;
-      // Outliers rejection
-      rangingStats[current_anchor].ptr = (rangingStats[current_anchor].ptr + 1) % RANGING_HISTORY_LENGTH;
-      float32_t mean;
-      float32_t stddev;
-
-      arm_std_f32(rangingStats[current_anchor].history, RANGING_HISTORY_LENGTH, &stddev);
-      arm_mean_f32(rangingStats[current_anchor].history, RANGING_HISTORY_LENGTH, &mean);
-      float32_t diff = fabsf(mean - state.distance[current_anchor]);
-
-      rangingStats[current_anchor].history[rangingStats[current_anchor].ptr] = state.distance[current_anchor];
-
-      rangingOk = true;
-
-      if ((options->combinedAnchorPositionOk || options->anchorPosition[current_anchor].timestamp) &&
-          (diff < (OUTLIER_TH*stddev))) {
-        distanceMeasurement_t dist;
-        dist.distance = state.distance[current_anchor];
-        dist.x = options->anchorPosition[current_anchor].x;
-        dist.y = options->anchorPosition[current_anchor].y;
-        dist.z = options->anchorPosition[current_anchor].z;
-        dist.stdDev = 0.25;
-        estimatorEnqueueDistance(&dist);
-      }
-
-      ranging_complete = true;
-      */
+      pdistance = SPEED_OF_LIGHT * tprop;
+DEBUG_PRINT("d=%d\n",(int)(100*pdistance));
       break;
     }
   }
@@ -218,8 +189,8 @@ static void initiateRanging(dwDevice_t *dev)
   pressure = temperature = asl = 0;
   pressure_ok = true;
 
-  txPacket.sourceAddress = 0xbccf000000000000 | 12;
-  txPacket.destAddress = 0xbccf000000000000 | 13;
+  txPacket.sourceAddress = 0xbccf000000000000 | 13;
+  txPacket.destAddress = 0xbccf000000000000 | 12;
   txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
   txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
 
@@ -237,7 +208,7 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
   switch(event) {
     case eventPacketReceived:
-      cntout=20;
+      timeout_p2p=60;
       rxcallback(dev);
       break;
     case eventPacketSent:
@@ -247,10 +218,7 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       dwNewReceive(dev);
       dwSetDefaults(dev);
       dwStartReceive(dev);
-      if(++ertcnt>cntout)
-        ertcnt=0;
-      else 
-        break;
+      break;
     case eventTimeout:  // Comes back to timeout after each ranging attempt
       initiateRanging(dev);
       break;
@@ -300,6 +268,6 @@ uwbAlgorithm_t uwbP2PDistAlgorithm = {
   .getActiveAnchorIdList = getActiveAnchorIdList,
 };
 
-LOG_GROUP_START(p2p)
-LOG_ADD(LOG_FLOAT, distance2peer, distance)
-LOG_GROUP_STOP(p2p)
+LOG_GROUP_START(peerdist)
+LOG_ADD(LOG_FLOAT, distance2peer, &pdistance)
+LOG_GROUP_STOP(peerdist)

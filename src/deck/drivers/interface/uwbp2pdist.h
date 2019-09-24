@@ -10,7 +10,7 @@
 #define LPS_P2P_ANSWER 0x02
 #define LPS_P2P_FINAL 0x03
 #define LPS_P2P_REPORT 0x04 // Report contains all measurement from the anchor
-
+#define LPS_P2P_INFORM 0X05
 #define LPS_P2P_TYPE 0
 #define LPS_P2P_SEQ 1
 

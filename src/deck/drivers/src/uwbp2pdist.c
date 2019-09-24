@@ -20,8 +20,8 @@ static dwTime_t answer_tx;
 static dwTime_t answer_rx;
 static dwTime_t final_tx;
 static dwTime_t final_rx;
-static float distances[NUM_UAV]={0.0,0.0,0.0}
-static locoAddress_t fullAddress[NUM_UAV]={0xbccf000000000000|10，0xbccf000000000000|20，0xbccf000000000000|30}; 
+static float distances[NUM_UAV]={0.0,0.0,0.0};
+static locoAddress_t fullAddress[NUM_UAV]={0xbccf000000000000|10,0xbccf000000000000|20,0xbccf000000000000|30}; 
 static locoAddress_t myAddress;  //store my ownAddress
 static packet_t txPacket;   //发送的包
 
@@ -41,7 +41,7 @@ locoAddress_t nextAddress(locoAddress_t s)    //用于返回下一架无人机�
       if(fullAddress[i]==s)
         return fullAddress[(i+1)%NUM_UAV];
    }
-   return NULL;
+   return 0xbccf000000000000;
 }
 
 //建立一个映射关系，知道地址，去逻辑下标
@@ -94,7 +94,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   memset(&rxPacket, 0, MAC802154_HEADER_LENGTH);
   dwGetData(dev, (uint8_t*)&rxPacket, dataLength);
 
-  DEBUG_PRINT("F %d\t", (unsigned int)txPacket.destAddress);
+  DEBUG_PRINT("F %d\t", (unsigned int)rxPacket.sourceAddress);
 
   switch(rxPacket.payload[LPS_P2P_TYPE]) {  //负载中第一字节是表示报文类型
     case LPS_P2P_POLL:     //最先检查地址，不是自己的则不处理
@@ -114,7 +114,7 @@ DEBUG_PRINT("POLL\n");
       break;
 
     case LPS_P2P_ANSWER:   //answer 报文是必须要要做地址解析的,但是final报文是不能携带计算数据的
-    if(rxPacket.destAddress!=myAdress||rxPacket.payload[LPS_P2P_SEQ]!=curr_seq) return 0;
+    if(rxPacket.destAddress!=myAddress||rxPacket.payload[LPS_P2P_SEQ]!=curr_seq) return 0;
 DEBUG_PRINT("ANS\n");
 
       txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_FINAL;
@@ -124,16 +124,15 @@ DEBUG_PRINT("ANS\n");
      
       arival.full -= (ANTENNA_DELAY / 2);
       answer_rx = arival;
-      
       dwNewTransmit(dev);
       dwSetDefaults(dev);
-      dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2));  //将做需要的计算数据传输过去
+      dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);  //将做需要的计算数据传输过去
       dwWaitForResponse(dev, true);
       dwStartTransmit(dev);
       break;
     case LPS_P2P_FINAL:   //现在改成收到finnal报文报文时计算数据,注意final报文时测距方发出，被测距的收到，所以不检测seq
 DEBUG_PRINT("FIN\n");
-      if(rxPacket.destAddress!=myAdress) return 0;
+      if(rxPacket.destAddress!=myAddress) return 0;
       
      lpsp2pTagReportPayload_t *report = (lpsp2pTagReportPayload_t *)(txPacket.payload+2);
 
@@ -153,29 +152,36 @@ DEBUG_PRINT("FIN\n");
       dwNewTransmit(dev);
       dwSetDefaults(dev);
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2+sizeof(lpsp2pTagReportPayload_t));
-      //dwWaitForResponse(dev, true);   现在只需要report就行，不需要等回应
+      dwWaitForResponse(dev, true);  // 现在只需要report就行，不需要等回应
       dwStartTransmit(dev);
-      //timeout_p2p = default_twr_interval/2; //set a shorter delay to sent next poll
+
+      // dwNewReceive(dev);
+      // dwSetDefaults(dev);
+      // dwStartReceive(dev);
       break;
     case LPS_P2P_REPORT:     /*目的地址不是自己。令牌环不是自己的话，就不管，收到report论文时，如果目的地址是我，则接受距离信息，并存储为相对应的距离
-                              如果令牌环是自己，但目的地址不是自己的话，则说明上一家已经完成数据采集了*/
-    {                         
+                              如果令牌环是自己，但目的地址不是自己的话，则说明上一家已经完成数据采集了*/       
+    {               
 DEBUG_PRINT("REPT\n"); 
-      if(rxPacket.destAddress!=myAddres||rxPacket.payload[LPS_P2P_SEQ]!=curr_seq)  return 0;   
+      if(rxPacket.destAddress!=myAddress||rxPacket.payload[LPS_P2P_SEQ]!=curr_seq)  return 0;   
 
       //是别人回传距离数据的
       //保存对应的距离
-      
+      double tround1,treply1,treply2,tround2,tprop_ctn,tprop;
+      lpsp2pTagReportPayload_t *report=(lpsp2pTagReportPayload_t *)(rxPacket.payload+2);
+      memcpy(&poll_rx,&report->pollRx,5);
+      memcpy(&answer_tx,&report->answerTx,5);
+      memcpy(&final_rx,&report->finalRx,5);
       tround1 = answer_rx.low32 - poll_tx.low32;
       treply1 = answer_tx.low32 - poll_rx.low32;
       tround2 = final_rx.low32 - answer_tx.low32;
       treply2 = final_tx.low32 - answer_rx.low32;
 
-      tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2)
+      tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
       distances[findIndex(rxPacket.sourceAddress)] = SPEED_OF_LIGHT * tprop;   //将距离存在适当的位置
     
-DEBUG_PRINT("d=%d\n",(int)(100*pdistance));
+DEBUG_PRINT("d=%d\n",(int)(100*distances[findIndex(rxPacket.sourceAddress)]));
       if(nextAddress(rxPacket.sourceAddress)!=myAddress)  //距离信息还没收集满,因为最后一次采集是我的逻辑上家,则发送一次poll报文
       {
         txPacket.sourceAddress = myAddress; 
@@ -187,40 +193,42 @@ DEBUG_PRINT("d=%d\n",(int)(100*pdistance));
         dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
         dwWaitForResponse(dev, true);
         dwStartTransmit(dev);
+        DEBUG_PRINT("To %d\t", (unsigned int)txPacket.destAddress);
       }
       else    //距离信息已经收集满，则发inform报文，通知下一家开始采集邻居数据
       {
         txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_INFORM;
         txPacket.payload[LPS_P2P_SEQ] = rxPacket.payload[LPS_P2P_SEQ];
         txPacket.sourceAddress = myAddress;
-        txPacket.destAddress = nextAddress(address,NUM_UAV,myaddress);  //逻辑环路中的下一架无人机
+        txPacket.destAddress = nextAddress(myAddress);  //逻辑环路中的下一架无人机
         dwNewTransmit(dev);
         dwSetDefaults(dev);
-        dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2)；  //
-        //dwWaitForResponse(dev, true);   这里先暂时不考虑接受回应，只发通知就好了
+        dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);  //
+        dwWaitForResponse(dev, true);   //这里先暂时不考虑接受回应，只发通知就好了
         dwStartTransmit(dev);
-      }
+
+        // dwNewReceive(dev);
+        // dwSetDefaults(dev);
+        // dwStartReceive(dev);
       }
       break;
+    }
       case LPS_P2P_INFORM:               //假如是通知报文的话，如果是我的地址，我将修改令牌(逻辑下家)，开始向逻辑下家发送poll报文
-      {
-        if(rxPacket.desAddress!=myaddress)  //如果不是给我的通知，则丢弃
-          return 0；
+        if(rxPacket.destAddress!=myAddress)  //如果不是给我的通知，则丢弃
+          return 0;
         else     //是给我的通知
         {
           txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
           txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
-          txPacket.destAddress=nextAddress(myAddress);  //允许逻辑下家和我通信
-          txPacket.sourceAddress = myaddress;
+          txPacket.destAddress=nextAddress(myAddress);  //允许逻辑下家
+          txPacket.sourceAddress = myAddress;
           dwNewTransmit(dev);
           dwSetDefaults(dev);
-          dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2)；  //+4 for pass back distance
+          dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2); 
           dwWaitForResponse(dev, true);
           dwStartTransmit(dev);
         }
-      }
       break;
-    }
   }
   return timeout_p2p;
 }
@@ -242,22 +250,26 @@ static void initiateRanging(dwDevice_t *dev)     //在这个函数中实现指�
   pressure_ok = true;
 
   //获取自身物理信息关联的ip
-  myAddress=0xbccf000000000000|10;  //这个值每次都要动态的改
-  if(myAddress!=address[0])   //如果不是逻辑第一架，则不发送poll报文
-    return ;
-  txPacket.sourceAddress = address[0]; //poll报文是广播，可不写目的地址
-  txPacket.destAddress = 0xbccf000000000000;
-  txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
-  txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
-
-  dwNewTransmit(dev);
-  dwSetDefaults(dev);
-  dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
-
-  dwWaitForResponse(dev, true);
-  dwStartTransmit(dev);
-
-  DEBUG_PRINT("T %x\n", (unsigned int)txPacket.destAddress);
+  myAddress=0xbccf000000000000|30;  //这个值每次都要动态的改
+  if(myAddress==fullAddress[0])   //如果不是逻辑第一架，则不发送poll报文
+  {
+    txPacket.sourceAddress = fullAddress[0]; 
+    txPacket.destAddress = fullAddress[1];
+    txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
+    txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
+    dwNewTransmit(dev);
+    dwSetDefaults(dev);
+    dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
+    dwWaitForResponse(dev, true);
+    dwStartTransmit(dev);
+    DEBUG_PRINT("To %d\n", (unsigned int)txPacket.destAddress);
+  }
+  else
+  {
+    dwNewReceive(dev);
+    dwSetDefaults(dev);
+    dwStartReceive(dev);
+  }
 }
 
 static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
@@ -269,18 +281,18 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       rxcallback(dev);
       break;
     case eventPacketSent:
-      DEBUG_PRINT("ePS\n"),
+      //DEBUG_PRINT("ePS\n"),
       txcallback(dev);
       break;
     case eventReceiveTimeout:   
-      DEBUG_PRINT("eRT\n"),
+      //DEBUG_PRINT("eRT\n"),
       dwNewReceive(dev);
       dwSetDefaults(dev);
       dwStartReceive(dev);
       timeout_p2p = (timeout_p2p>MAX_UWB_RECEIVE_TIMEOUT ? timeout_p2p-MAX_UWB_RECEIVE_TIMEOUT : 0) ;
       break;
     case eventTimeout:  // 一直收不到，则重启全部对话
-      DEBUG_PRINT("eT\n"),
+      //DEBUG_PRINT("eT\n"),
       initiateRanging(dev);
       timeout_p2p=default_twr_interval;
       break;

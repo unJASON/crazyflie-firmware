@@ -7,7 +7,7 @@
 #include "crtp_localization_service.h"
 #include "physicalConstants.h"
 #include "configblock.h"
-#include "console.h"
+#include "semphr.h"
 #include "timers.h"
 
 #define ANTENNA_OFFSET 154.6   // In meter
@@ -32,7 +32,7 @@ static packet_t txPacket;   //发送的包
 
 static volatile uint8_t curr_seq = 0;  //序号
 
-
+static int64_t MAX_TIMESTAMP = 1099511627776; //2**40
 static uint32_t timeout_p2m=0;
 static uint32_t default_twr_interval=8000;   //设置最大超时重传poll报文的时间
 
@@ -40,6 +40,8 @@ static dwTime_t transmit_timer[NUM_CYC]; //stores recent NUM_CYC transmission ti
 
 static agent_cache old_cache[NUM_UAV];  // stores the old information
 static agent_cache new_cache[NUM_UAV];  // stores the received information
+
+static SemaphoreHandle_t visitSemaphore;
 static bool isVisit[NUM_UAV] = {false,false,false};
 static Agent_info  received_agent[NUM_UAV];  //stores the information received from others
 //建立一个映射关系，知道地址，去逻辑下标
@@ -50,34 +52,31 @@ static int findIndex(locoAddress_t find)
       return i;
   return -1;
 }
-
+static dwTime_t departure;
 static void txcallback(dwDevice_t *dev)    //发送报文的回调函数
 {
-  dwTime_t departure;
   dwGetTransmitTimestamp(dev, &departure);   //获取发送时间戳
   departure.full += (ANTENNA_DELAY / 2);      //加入天线延迟，否则计算结果差距很大
   transmit_timer[curr_seq] = departure;     //store the leaving timestamp 
-// DEBUG_PRINT("m:%lu\n",time_bias.low32);
-// DEBUG_PRINT("d:%lu %d\n",departure.high32,departure.low8);
-  curr_seq = (curr_seq + 1) % NUM_CYC;      
-  dwNewReceive(dev);
-  dwSetDefaults(dev);
-  dwStartReceive(dev);
+
+  curr_seq = (curr_seq + 1) % NUM_CYC;
 }
 
-
+static int64_t temp,temp_end,temp_start;
+static int64_t difference1,difference2;      //difference
+static Agent_info agent;
+static int64_t tround1,treply1,treply2,tround2;
+static double tprop,tprop_ctn;
+static int check_index;
+static int i;
+static packet_t rxPacket;
+static int my_index,cache_index;
 static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
-{ 
-  
+{  
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);    //获取收到报文时的时间戳
   
-  uint8_t temp;
-  uint32_t bias32;
-  uint8_t bias8;
-  memset(&bias8,-1,sizeof(uint8_t));
-  memset(&bias32,-1,sizeof(uint32_t));
-
+  
   int dataLength = dwGetDataLength(dev);
   if (dataLength == 0) {
     // in case the error packet
@@ -86,33 +85,33 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
     dwStartReceive(dev);
     return 0;
   }
-
-  packet_t rxPacket;
+  
   memset(&rxPacket, 0, MAC802154_HEADER_LENGTH);
   dwGetData(dev, (uint8_t*)&rxPacket, dataLength);
   
-  int my_index = findIndex(myAddress);
-  int cache_index = findIndex(rxPacket.sourceAddress);
-  if (my_index == cache_index){
-    dwNewReceive(dev);
-    dwSetDefaults(dev);
-    dwStartReceive(dev);
-    return timeout_p2m;
-  }
+  my_index = findIndex(myAddress);
+  cache_index = findIndex(rxPacket.sourceAddress);
+
   arival.full -= (ANTENNA_DELAY/2);
   lpsp2mUNIPayload_t *report = (lpsp2mUNIPayload_t *)(rxPacket.payload);
-  
+  // accessing critical resource
+  while (true){
+    if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
+        break;
+    }
+  }
   isVisit[cache_index] = true;    //set the visit flag, semaphore is required in the future.
   received_agent[cache_index].agent_idx = cache_index;
   received_agent[cache_index].received_timestamp = arival;
   received_agent[cache_index].answer_idx = report->idx;
-
-  for (int i = 0; i < report->group_num;i++){
-    Agent_info agent = report->received_group[i];
+  xSemaphoreGive(visitSemaphore);
+  //***************
+  for (i = 0; i < report->group_num;i++){
+    agent = report->received_group[i];
     if ( agent.agent_idx == (uint8_t)my_index ){
-      //check and do some substitution
+  //     //check and do some substitution
       
-      int check_index = (old_cache[cache_index].agent_transmission_idx +1)%NUM_CYC;
+      check_index = (old_cache[cache_index].agent_transmission_idx +1)%NUM_CYC;
       
       new_cache[cache_index].my_recevied_time = arival;
       new_cache[cache_index].my_transmission_idx = agent.answer_idx;
@@ -128,20 +127,48 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
           answer_rx = old_cache[cache_index].my_recevied_time;
           final_tx = transmit_timer[new_cache[cache_index].my_transmission_idx];
           final_rx = new_cache[cache_index].agent_last_received_time;
-          double tround1,treply1,treply2,tround2,tprop_ctn,tprop;
-
+          
           // modify the formulation to deal with the overflow problem.
-          temp = (answer_rx.high8 - poll_tx.high8 + bias8+1) % (bias8+1);
-          tround1 = temp*(bias32+1)+ (answer_rx.low32 - poll_tx.low32);
-          temp = (answer_tx.high8 - poll_rx.high8+ bias8+1 ) % (bias8+1);
-          treply1 = temp*(bias32+1)+ (answer_tx.low32 - poll_rx.low32);
-          temp = (final_rx.high8 - answer_tx.high8+ bias8+1) % (bias8+1);
-          tround2 = temp*(bias32+1)+(final_rx.low32 - answer_tx.low32);
-          temp = (final_tx.high8 - answer_rx.high8+ bias8+1)% (bias8+1) ;
-          treply2 = temp*(bias32+1)+(final_tx.low32 - answer_rx.low32);
-          tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);          
+          temp_end = answer_rx.high8;
+          temp_end = temp_end<<32;
+          temp_start = poll_tx.high8;
+          temp_start= temp_start<<32;
+          temp = (MAX_TIMESTAMP+temp_end + answer_rx.low32 - temp_start - poll_tx.low32)%MAX_TIMESTAMP;
+          tround1 = temp;
+          
+
+          temp_end = answer_tx.high8;
+          temp_end = temp_end<<32;
+          temp_start=poll_rx.high8;
+          temp_start = temp_start<<32;
+          temp = (MAX_TIMESTAMP+temp_end + answer_tx.low32 - temp_start - poll_rx.low32)%MAX_TIMESTAMP;
+          treply1 = temp;
+          
+          temp_end=final_rx.high8;
+          temp_end = temp_end<<32;
+          temp_start= answer_tx.high8;
+          temp_start = temp_start<<32;
+          temp = (MAX_TIMESTAMP+temp_end + final_rx.low32 -temp_start - answer_tx.low32)%MAX_TIMESTAMP;
+          tround2 = temp;
+         
+          temp_end=final_tx.high8;
+          temp_end = temp_end<<32;
+          temp_start=answer_rx.high8;
+          temp_start = temp_start<<32;
+          temp = (MAX_TIMESTAMP+temp_end + final_tx.low32 - temp_start - answer_rx.low32)%MAX_TIMESTAMP;
+          treply2 = temp;
+
+          
+          
+          //overflow: tround1 * tround2 and  treply1*treply2 
+          difference1 = tround1 - treply1;
+          difference2 = tround2 - treply2;
+          tprop_ctn = (difference1 * treply2 + difference2*treply1 + difference2* difference1)/( (tround1 + tround2 + treply1 + treply2) *1.0 );
+
           tprop = tprop_ctn/LOCODECK_TS_FREQ;
           distances[cache_index] = SPEED_OF_LIGHT * tprop;
+          // tprop = tprop_ctn;
+          // distances[cache_index] = tprop;          
       }else{
         // do nothing
       }
@@ -152,11 +179,13 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
       old_cache[cache_index].agent_last_received_time=new_cache[cache_index].agent_last_received_time;
     }
   }
+
   dwNewReceive(dev);
   dwSetDefaults(dev);
   dwStartReceive(dev);
   return timeout_p2m;
 }
+
 
 
 static void initiateRanging(dwDevice_t *dev)     //在这个函数中实现指定第一架飞机发起poll报文，开启整个会话
@@ -201,12 +230,19 @@ static uint32_t p2mDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 static TimerHandle_t Transmit_timer_handle = NULL;
 static dwDevice_t *dev_timer;
 static void runTransmit(){
+  
   txPacket.destAddress=myAddress;
   txPacket.sourceAddress=myAddress;
   lpsp2mUNIPayload_t *report =(lpsp2mUNIPayload_t *)(txPacket.payload);
   report->idx = curr_seq;
   report->last_transmission_time = transmit_timer[ (curr_seq+NUM_CYC-1)%NUM_CYC ];
   uint8_t len = 0;
+  // accessing critical resource
+  while (true){
+    if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
+        break;
+    }
+  }
   for (int i= 0 ;i<NUM_UAV;i++){
     if(isVisit[i]){
         memcpy(&report->received_group[len],&received_agent[i],sizeof(Agent_info));
@@ -214,20 +250,29 @@ static void runTransmit(){
         isVisit[i] = false;
     }
   }
+  xSemaphoreGive(visitSemaphore);
+// *****************************
   report->group_num = len;
+
   dwNewTransmit(dev_timer);
   dwSetDefaults(dev_timer);
   dwSetData(dev_timer, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+sizeof(lpsp2mUNIPayload_t));
-  // dwWaitForResponse(dev_timer, true);
+  dwWaitForResponse(dev_timer, true);
   dwStartTransmit(dev_timer);
 }
 
 
 void startTransmitTimer(dwDevice_t *dev){
+  // create a binary semaphore for lock.
+  vSemaphoreCreateBinary(visitSemaphore);
+  if (visitSemaphore == NULL){
+    FAIL_PRINT("semaphore create fail\n");
+  }
   dev_timer = dev;
+  vTaskDelay(M2T(5000));// all UAVs should be started in 5 seconds
   Transmit_timer_handle = xTimerCreate("P2M_transmit_timer", M2T(100), pdTRUE, (void*)20, runTransmit);
   if(Transmit_timer_handle != NULL){
-    xTimerStart(Transmit_timer_handle,0);
+    xTimerStart(Transmit_timer_handle, 0);
   }
 }
 

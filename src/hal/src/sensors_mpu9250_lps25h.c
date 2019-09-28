@@ -135,7 +135,7 @@ static lpf2pData gyroLpf[3];
 static void applyAxis3fLpf(lpf2pData *data, Axis3f* in);
 
 static bool isBarometerPresent = false;
-static bool isMagnetometerPresent = false;
+static bool isMagnetometerPresent = true;
 
 static bool isMpu6500TestPassed = false;
 static bool isAK8963TestPassed = false;

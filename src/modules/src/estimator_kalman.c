@@ -238,6 +238,9 @@ void estimatorKalman(state_t *state, sensorData_t *sensors, control_t *control, 
 #ifdef KALMAN_DECOUPLE_XY
   kalmanCoreDecoupleXY(this);
 #endif
+#ifdef SENSOR_INCLUDED_MPU9250_LPS25H
+  sensorsReadMag(&sensors->mag);
+#endif
 
   // Average the last IMU measurements. We do this because the prediction loop is
   // slower than the IMU loop, but the IMU information is required externally at
@@ -255,6 +258,8 @@ void estimatorKalman(state_t *state, sensorData_t *sensors, control_t *control, 
     gyroAccumulator.z += sensors->gyro.z;
     gyroAccumulatorCount++;
   }
+
+  
 
   // Average the thrust command from the last time steps, generated externally by the controller
   thrustAccumulator += control->thrust;

@@ -10,9 +10,9 @@
 #include "semphr.h"
 #include "timers.h"
 
-#define ANTENNA_OFFSET 154.6   // In meter
+#define ANTENNA_OFFSET 154.33   // In meter
 
-#define NUM_UAV 3       //当前无人机数量
+#define NUM_UAV 5       //当前无人机数量
 #define NUM_CYC 100      // number of transmit cycle stored in memory
 static int ANTENNA_DELAY = (ANTENNA_OFFSET*499.2e6*128)/299792458.0; // In radio tick
 
@@ -24,9 +24,11 @@ static dwTime_t answer_rx;
 static dwTime_t final_tx;
 static dwTime_t final_rx;
 
-static float distances[NUM_UAV]={0.0,0.0,0.0};
 
-static locoAddress_t fullAddress[NUM_UAV]={0xbccf000000000000|50,0xbccf000000000000|85,0xbccf000000000000|95}; 
+static float distances[NUM_UAV]={0.0,0.0,0.0,0.0,0.0};
+static locoAddress_t fullAddress[NUM_UAV]={0xbccf000000000000|30,0xbccf000000000000|35,0xbccf000000000000|45,0xbccf000000000000|85,0xbccf000000000000|90}; 
+static bool isVisit[NUM_UAV] = {false,false,false,false,false};
+
 static locoAddress_t myAddress;  //store my ownAddress
 static packet_t txPacket;   //发送的包
 
@@ -42,7 +44,6 @@ static agent_cache old_cache[NUM_UAV];  // stores the old information
 static agent_cache new_cache[NUM_UAV];  // stores the received information
 
 static SemaphoreHandle_t visitSemaphore;
-static bool isVisit[NUM_UAV] = {false,false,false};
 static Agent_info  received_agent[NUM_UAV];  //stores the information received from others
 //建立一个映射关系，知道地址，去逻辑下标
 static int findIndex(locoAddress_t find)
@@ -75,8 +76,8 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 {  
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);    //获取收到报文时的时间戳
-  
-  
+
+
   int dataLength = dwGetDataLength(dev);
   if (dataLength == 0) {
     // in case the error packet
@@ -85,10 +86,10 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
     dwStartReceive(dev);
     return 0;
   }
-  
+
   memset(&rxPacket, 0, MAC802154_HEADER_LENGTH);
   dwGetData(dev, (uint8_t*)&rxPacket, dataLength);
-  
+
   my_index = findIndex(myAddress);
   cache_index = findIndex(rxPacket.sourceAddress);
 
@@ -164,11 +165,9 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
           difference1 = tround1 - treply1;
           difference2 = tround2 - treply2;
           tprop_ctn = (difference1 * treply2 + difference2*treply1 + difference2* difference1)/( (tround1 + tround2 + treply1 + treply2) *1.0 );
-
           tprop = tprop_ctn/LOCODECK_TS_FREQ;
           distances[cache_index] = SPEED_OF_LIGHT * tprop;
-          // tprop = tprop_ctn;
-          // distances[cache_index] = tprop;          
+          
       }else{
         // do nothing
       }
@@ -179,7 +178,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
       old_cache[cache_index].agent_last_received_time=new_cache[cache_index].agent_last_received_time;
     }
   }
-
+  
   dwNewReceive(dev);
   dwSetDefaults(dev);
   dwStartReceive(dev);
@@ -192,9 +191,7 @@ static void initiateRanging(dwDevice_t *dev)     //在这个函数中实现指�
 {
   dwIdle(dev);
   //获取自身物理信息关联的ip
-  int myChanel = configblockGetRadioChannel();
-  myAddress=0xbccf000000000000|myChanel;  //这个值每次都要动态的改
-  
+  myAddress=0xbccf000000000000|configblockGetRadioChannel();  //这个值每次都要动态的改
   dwNewReceive(dev);
   dwSetDefaults(dev);
   dwStartReceive(dev);
@@ -226,11 +223,12 @@ static uint32_t p2mDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
   return timeout_p2m;
 }
 
-
+// ***********runTransmit()****************
 static TimerHandle_t Transmit_timer_handle = NULL;
 static dwDevice_t *dev_timer;
+// ************runTransmit()***************
 static void runTransmit(){
-  
+
   txPacket.destAddress=myAddress;
   txPacket.sourceAddress=myAddress;
   lpsp2mUNIPayload_t *report =(lpsp2mUNIPayload_t *)(txPacket.payload);
@@ -253,7 +251,8 @@ static void runTransmit(){
   xSemaphoreGive(visitSemaphore);
 // *****************************
   report->group_num = len;
-
+  
+  xTimerChangePeriod(Transmit_timer_handle,M2T(100),10000);
   dwNewTransmit(dev_timer);
   dwSetDefaults(dev_timer);
   dwSetData(dev_timer, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+sizeof(lpsp2mUNIPayload_t));
@@ -269,8 +268,8 @@ void startTransmitTimer(dwDevice_t *dev){
     FAIL_PRINT("semaphore create fail\n");
   }
   dev_timer = dev;
-  vTaskDelay(M2T(5000));// all UAVs should be started in 5 seconds
-  Transmit_timer_handle = xTimerCreate("P2M_transmit_timer", M2T(100), pdTRUE, (void*)20, runTransmit);
+  vTaskDelay(5000);
+  Transmit_timer_handle = xTimerCreate("P2M_transmit_timer", M2T(150), pdFALSE, (void*)20, runTransmit);// run the transmit function
   if(Transmit_timer_handle != NULL){
     xTimerStart(Transmit_timer_handle, 0);
   }
@@ -280,12 +279,12 @@ static void p2mDistInit(dwDevice_t *dev)
 {
   return;
   // Initialize the packet in the TX buffer
-  memset(&txPacket, 0, sizeof(txPacket));
-  MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);
-  txPacket.pan = 0xbccf;
+  // memset(&txPacket, 0, sizeof(txPacket));
+  // MAC80215_PACKET_INIT(txPacket, MAC802154_TYPE_DATA);
+  // txPacket.pan = 0xbccf;
 
-  dwSetReceiveWaitTimeout(dev, 0);
-  dwCommitConfiguration(dev);
+  // dwSetReceiveWaitTimeout(dev, 0);
+  // dwCommitConfiguration(dev);
 }
 
 static bool isRangingOk()
@@ -321,4 +320,6 @@ LOG_GROUP_START(peerdist)
 LOG_ADD(LOG_FLOAT, distance2peer10,&distances[0])
 LOG_ADD(LOG_FLOAT, distance2peer20,&distances[1])
 LOG_ADD(LOG_FLOAT, distance2peer30,&distances[2])
+LOG_ADD(LOG_FLOAT, distance2peer40,&distances[3])
+LOG_ADD(LOG_FLOAT, distance2peer50,&distances[4])
 LOG_GROUP_STOP(peerdist)

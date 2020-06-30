@@ -43,11 +43,11 @@ typedef struct {
 } __attribute__((packed)) lpsp2mUNIPayload_t;
 
 typedef struct{
-  uint8_t my_transmission_idx;  // the idx of my next transmission
-  uint8_t agent_transmission_idx; //the idx of agent's transmission in this time.
-  dwTime_t my_recevied_time;    // the local timestamp when receving from agent
-  dwTime_t agent_last_received_time;  //data received from agent denotes the last receving timestamp.
-  dwTime_t agent_transmit_time;  //data received from agent denotes last transmitting timestamp.
+  uint8_t my_transmission_idx;  // the idx of my transmission	agent 携带 用于标记 agent_last_received_time 对应的接收索引
+  uint8_t agent_transmission_idx; //the idx of agent's transmission in this time. agent 本次 传输索引 
+  dwTime_t my_recevied_time;    // the local timestamp when receving from agent		本机 接收 agent 本次传输 时间戳
+  dwTime_t agent_last_received_time;  //data received from agent denotes the last receving timestamp.	agent 携带 上次接收本机报文 产生的 时间
+  dwTime_t agent_transmit_time;  //data received from agent denotes last transmitting timestamp.	agent 携带 上次agent传输时刻的 时间戳
 } __attribute__((packed)) agent_cache;
 
 

@@ -28,3 +28,5 @@ current_platform.mk
 
 
 /docs/.jekyll-metadata
+
+/.vs

@@ -38,8 +38,9 @@ typedef struct{
 typedef struct {
   uint8_t group_num;
   uint8_t idx; //index of transmission
+  uint8_t my_idx; // index of my address
   dwTime_t last_transmission_time;  // last transmission timestamp
-  Agent_info received_group[5]; //3 group member
+  Agent_info received_group[9]; //3 group member
 } __attribute__((packed)) lpsp2mUNIPayload_t;
 
 typedef struct{

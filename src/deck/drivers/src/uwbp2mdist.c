@@ -33,7 +33,7 @@ static locoAddress_t fullAddress[NUM_UAV]={0xbccf000000000000|10,0xbccf000000000
 static bool isVisit[NUM_UAV] = {false,false,false,false,false,false,false,false,false};
 
 static locoAddress_t myAddress;  //store my ownAddress
-static uint8_t my_index;             //store my index
+static uint8_t my_addr_idx;             //store my index
 
 static packet_t txPacket;   //发送的包
 
@@ -102,7 +102,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   arival.full -= (ANTENNA_DELAY/2);
   lpsp2mUNIPayload_t *report = (lpsp2mUNIPayload_t *)(rxPacket.payload);
   
-  cache_index = report->my_idx; // index from received packet
+  cache_index = report->my_addr_idx; // index from received packet
   if (cache_index >= NUM_UAV || cache_index <0)
   {
     DEBUG_PRINT("idx_err: %u\n",cache_index);
@@ -121,21 +121,21 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   xSemaphoreGive(visitSemaphore);
 
   //***************
-  
+  bool isContain = false;
   for (i = 0; i < report->group_num;i++){
     agent = report->received_group[i];
-    if ( agent.agent_idx == my_index ){
-  //     //check and do some substitution
-      
-
+    if ( agent.agent_idx == my_addr_idx ){
+      //check and do some substitution
+      isContain = true;
       check_index = (old_cache[cache_index].agent_transmission_idx +1)%NUM_CYC;
-      
       new_cache[cache_index].my_recevied_time = arival;
       new_cache[cache_index].my_transmission_idx = agent.answer_idx;
       new_cache[cache_index].agent_transmission_idx = report->idx;
       new_cache[cache_index].agent_last_received_time = agent.received_timestamp;
+      
+      
       if (report->idx == check_index){
-        // do caculation
+          // do caculation
           memcpy(&old_cache[cache_index].agent_transmit_time,&report->last_transmission_time,5);
           poll_tx = transmit_timer[old_cache[cache_index].my_transmission_idx];
           poll_rx = old_cache[cache_index].agent_last_received_time;
@@ -187,12 +187,11 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
               distances[cache_index] = SPEED_OF_LIGHT * tprop;
           }else{
               // impossible situation
-          }
-          
-          
+          }  
           
       }else{
-        // do nothing
+        // case 4:
+        //  do nothing, just replacement
       }
       // do replacement
       old_cache[cache_index].my_recevied_time = new_cache[cache_index].my_recevied_time;
@@ -200,6 +199,11 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
       old_cache[cache_index].agent_transmission_idx=new_cache[cache_index].agent_transmission_idx;
       old_cache[cache_index].agent_last_received_time=new_cache[cache_index].agent_last_received_time;
     }
+  }
+  // case 1,2 replace the old_cache
+  if (!isContain){
+      old_cache[cache_index].my_recevied_time = arival;
+      old_cache[cache_index].agent_transmission_idx = report->idx;
   }
  
  
@@ -212,10 +216,9 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 
 
 
-static void initiateRanging(dwDevice_t *dev)     //在这个函数中实现指定第一架飞机发起poll报文，开启整个会话
+static void initiateRanging(dwDevice_t *dev)
 {
   dwIdle(dev);
- 
   dwNewReceive(dev);
   dwSetDefaults(dev);
   dwStartReceive(dev);
@@ -258,7 +261,7 @@ static void runTransmit(){
   lpsp2mUNIPayload_t *report =(lpsp2mUNIPayload_t *)(txPacket.payload);
   report->idx = curr_seq;
   report->last_transmission_time = transmit_timer[ (curr_seq+NUM_CYC-1)%NUM_CYC ];
-  report->my_idx = my_index;
+  report->my_addr_idx = my_addr_idx;
 
   uint8_t len = 0;
   // accessing critical resource
@@ -277,7 +280,7 @@ static void runTransmit(){
   xSemaphoreGive(visitSemaphore);
 // *****************************
   report->group_num = len;
-  int period = 150 + rand()%NUM_UAV;
+  int period = 5 + rand()%(NUM_UAV*4);
   xTimerChangePeriod(Transmit_timer_handle,M2T(period),10000);
   dwNewTransmit(dev_timer);
   dwSetDefaults(dev_timer);
@@ -298,7 +301,7 @@ void startTransmitTimer(dwDevice_t *dev){
   
   //获取自身物理信息关联的ip
   myAddress= 0xbccf000000000000|configblockGetRadioChannel();  //这个值每次都要动态的改
-  my_index = (uint8_t)findIndex(myAddress);
+  my_addr_idx = (uint8_t)findIndex(myAddress);
   Transmit_timer_handle = xTimerCreate("P2M_transmit_timer", M2T(150), pdFALSE, (void*)20, runTransmit);// run the transmit function
   if(Transmit_timer_handle != NULL){
     xTimerStart(Transmit_timer_handle, 0);

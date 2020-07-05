@@ -38,17 +38,17 @@ typedef struct{
 typedef struct {
   uint8_t group_num;
   uint8_t idx; //index of transmission
-  uint8_t my_idx; // index of my address
+  uint8_t my_addr_idx; // index of my address
   dwTime_t last_transmission_time;  // last transmission timestamp
   Agent_info received_group[9]; //3 group member
 } __attribute__((packed)) lpsp2mUNIPayload_t;
 
 typedef struct{
-  uint8_t my_transmission_idx;  // the idx of my transmission	agent Ğ¯´ø ÓÃÓÚ±ê¼Ç agent_last_received_time ¶ÔÓ¦µÄ½ÓÊÕË÷Òı
-  uint8_t agent_transmission_idx; //the idx of agent's transmission in this time. agent ±¾´Î ´«ÊäË÷Òı 
-  dwTime_t my_recevied_time;    // the local timestamp when receving from agent		±¾»ú ½ÓÊÕ agent ±¾´Î´«Êä Ê±¼ä´Á
-  dwTime_t agent_last_received_time;  //data received from agent denotes the last receving timestamp.	agent Ğ¯´ø ÉÏ´Î½ÓÊÕ±¾»ú±¨ÎÄ ²úÉúµÄ Ê±¼ä
-  dwTime_t agent_transmit_time;  //data received from agent denotes last transmitting timestamp.	agent Ğ¯´ø ÉÏ´Îagent´«ÊäÊ±¿ÌµÄ Ê±¼ä´Á
+  uint8_t my_transmission_idx;  // the idx of my transmission	agent æºå¸¦ ç”¨äºæ ‡è®° agent_last_received_time å¯¹åº”çš„æ¥æ”¶ç´¢å¼•
+  uint8_t agent_transmission_idx; //the idx of agent's transmission in this time. agent æœ¬æ¬¡ ä¼ è¾“ç´¢å¼• 
+  dwTime_t my_recevied_time;    // the local timestamp when receving from agent		æœ¬æœº æ¥æ”¶ agent æœ¬æ¬¡ä¼ è¾“ æ—¶é—´æˆ³
+  dwTime_t agent_last_received_time;  //data received from agent denotes the last receving timestamp.	agent æºå¸¦ ä¸Šæ¬¡æ¥æ”¶æœ¬æœºæŠ¥æ–‡ äº§ç”Ÿçš„ æ—¶é—´
+  dwTime_t agent_transmit_time;  //data received from agent denotes last transmitting timestamp.	agent æºå¸¦ ä¸Šæ¬¡agentä¼ è¾“æ—¶åˆ»çš„ æ—¶é—´æˆ³
 } __attribute__((packed)) agent_cache;
 
 

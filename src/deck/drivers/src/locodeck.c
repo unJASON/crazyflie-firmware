@@ -79,7 +79,7 @@
 #endif
 
 
-#define DEFAULT_RX_TIMEOUT 10000
+#define DEFAULT_RX_TIMEOUT 0
 
 
 #define ANTENNA_OFFSET 154.6   // In meter
@@ -293,9 +293,9 @@ startTransmitTimer(dwm);
         xSemaphoreGive(algoSemaphore);
       } while(digitalRead(GPIO_PIN_IRQ) != 0);
     } else {
-      xSemaphoreTake(algoSemaphore, portMAX_DELAY);
-      timeout = algorithm->onEvent(dwm, eventTimeout);
-      xSemaphoreGive(algoSemaphore);
+      // xSemaphoreTake(algoSemaphore, portMAX_DELAY);
+      // timeout = algorithm->onEvent(dwm, eventTimeout);
+      // xSemaphoreGive(algoSemaphore);
     }
   }
 }
@@ -453,7 +453,7 @@ static void dwm1000Init(DeckInfo *info)
   dwAttachSentHandler(dwm, txCallback);
   dwAttachReceivedHandler(dwm, rxCallback);
   dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
-
+  
   dwNewConfiguration(dwm);
   dwSetDefaults(dwm);
 
@@ -467,7 +467,7 @@ static void dwm1000Init(DeckInfo *info)
   dwSetChannel(dwm, CHANNEL_2);
   dwUseSmartPower(dwm, true);
   dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
-
+  // dwReceivePermanently(dwm,true);
   dwSetReceiveWaitTimeout(dwm, DEFAULT_RX_TIMEOUT);
 
   dwCommitConfiguration(dwm);

@@ -30,22 +30,21 @@ typedef struct {
 
 typedef struct{
   uint8_t agent_idx;  //agent's idx
-  uint8_t answer_idx; //  transmission idx from agent.
+  uint16_t answer_idx; //  transmission idx from agent.
   dwTime_t received_timestamp;  //receive time
 } __attribute__((packed)) Agent_info;
 
 // for each timestamp 5 Bytes is required
 typedef struct {
   uint8_t group_num;
-  uint8_t idx; //index of transmission
-  uint8_t my_addr_idx; // index of my address
+  uint16_t idx; //index of transmission
   dwTime_t last_transmission_time;  // last transmission timestamp
-  Agent_info received_group[9]; //3 group member
+  Agent_info received_group[8]; //3 group member
 } __attribute__((packed)) lpsp2mUNIPayload_t;
 
 typedef struct{
-  uint8_t my_transmission_idx;  // the idx of my transmission	agent 携带 用于标记 agent_last_received_time 对应的接收索引
-  uint8_t agent_transmission_idx; //the idx of agent's transmission in this time. agent 本次 传输索引 
+  uint16_t my_transmission_idx;  // the idx of my transmission	agent 携带 用于标记 agent_last_received_time 对应的接收索引
+  uint16_t agent_transmission_idx; //the idx of agent's transmission in this time. agent 本次 传输索引 
   dwTime_t my_recevied_time;    // the local timestamp when receving from agent		本机 接收 agent 本次传输 时间戳
   dwTime_t agent_last_received_time;  //data received from agent denotes the last receving timestamp.	agent 携带 上次接收本机报文 产生的 时间
   dwTime_t agent_transmit_time;  //data received from agent denotes last transmitting timestamp.	agent 携带 上次agent传输时刻的 时间戳

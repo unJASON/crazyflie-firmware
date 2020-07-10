@@ -14,7 +14,7 @@
 #define ANTENNA_OFFSET 154.33   // In meter
 
 #define NUM_UAV 9       //当前无人机数量
-#define NUM_CYC 100      // number of transmit cycle stored in memory
+#define NUM_CYC 1000      // number of transmit cycle stored in memory
 static int ANTENNA_DELAY = (ANTENNA_OFFSET*499.2e6*128)/299792458.0; // In radio tick
 
 // Timestamps for ranging
@@ -39,11 +39,11 @@ static packet_t txPacket;   //发送的包
 
 
 
-static volatile uint8_t curr_seq = 0;  //序号
+static volatile uint16_t curr_seq = 0;  //序号
 
 static int64_t MAX_TIMESTAMP = 1099511627776; //2**40
-static uint32_t timeout_p2m=0;
-static uint32_t default_twr_interval=8000;   //设置最大超时重传poll报文的时间
+static uint32_t default_twr_interval=80000;   
+static uint32_t timeout_p2m=80000;
 
 static dwTime_t transmit_timer[NUM_CYC]; //stores recent NUM_CYC transmission timestamp
 
@@ -76,7 +76,8 @@ static int64_t temp,temp_end,temp_start;
 static int64_t difference1,difference2;      //difference
 static Agent_info agent;
 static int64_t tround1,treply1,treply2,tround2;
-static double tprop,tprop_ctn;
+static double tprop;
+static int64_t tprop_ctn;
 static int check_index;
 static int i;
 static packet_t rxPacket;
@@ -85,7 +86,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 {  
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);    //获取收到报文时的时间戳
-
+  
 
   int dataLength = dwGetDataLength(dev);
   if (dataLength == 0) {
@@ -93,7 +94,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
     dwNewReceive(dev);
     dwSetDefaults(dev);
     dwStartReceive(dev);
-    return 0;
+    return timeout_p2m;
   }
 
   memset(&rxPacket, 0, MAC802154_HEADER_LENGTH);
@@ -101,11 +102,15 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 
   arival.full -= (ANTENNA_DELAY/2);
   lpsp2mUNIPayload_t *report = (lpsp2mUNIPayload_t *)(rxPacket.payload);
-  
-  cache_index = report->my_addr_idx; // index from received packet
-  if (cache_index >= NUM_UAV || cache_index <0)
+
+  cache_index = rxPacket.sourceAddress; // index from received packet
+  if (cache_index == my_addr_idx ||cache_index >= NUM_UAV || cache_index <0)
   {
     DEBUG_PRINT("idx_err: %u\n",cache_index);
+    dwNewReceive(dev);
+    dwSetDefaults(dev);
+    dwStartReceive(dev);
+    return timeout_p2m;
   }
   // accessing critical resource
   while (true){
@@ -179,16 +184,19 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
           //overflow: tround1 * tround2 and  treply1*treply2 
           difference1 = tround1 - treply1;
           difference2 = tround2 - treply2;
-          tprop_ctn = (difference1 * treply2 + difference2*treply1 + difference2* difference1)/( (tround1 + tround2 + treply1 + treply2) *1.0 );
+          tprop_ctn = (difference1 * treply2 + difference2*treply1 + difference2* difference1)/( (tround1 + tround2 + treply1 + treply2));
           
           
-          if (tprop_ctn >= 0 && tprop_ctn <=3200) {
-              tprop = tprop_ctn/LOCODECK_TS_FREQ;
-              distances[cache_index] = SPEED_OF_LIGHT * tprop;
+          if (tprop_ctn >= -2000 && tprop_ctn <=3200) {
+              // tprop = tprop_ctn/LOCODECK_TS_FREQ;
+              // distances[cache_index] = SPEED_OF_LIGHT * tprop;
+              tprop = tprop_ctn *(0.004691);
+              distances[cache_index] = tprop;
           }else{
               // impossible situation
-          }  
-          
+              distances[cache_index] = -0.1;
+          }
+
       }else{
         // case 4:
         //  do nothing, just replacement
@@ -216,9 +224,70 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 
 
 
+
+// ***********runTransmit()****************
+static TimerHandle_t Transmit_timer_handle = NULL;
+static dwDevice_t *dev_timer;
+// ************runTransmit()***************
+static void runTransmit(){
+
+  txPacket.destAddress=my_addr_idx;
+  txPacket.sourceAddress=my_addr_idx;
+  lpsp2mUNIPayload_t *report =(lpsp2mUNIPayload_t *)(txPacket.payload);
+  report->idx = curr_seq;
+  report->last_transmission_time = transmit_timer[ (curr_seq+NUM_CYC-1)%NUM_CYC ];
+  uint8_t len = 0;
+  // accessing critical resource
+  while (true){
+    if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
+        break;
+    }
+  }
+  for (uint8_t i= 0 ;i<NUM_UAV;i++){
+    if( (i!= my_addr_idx) && isVisit[i]){
+        memcpy(&report->received_group[len],&received_agent[i],sizeof(Agent_info));
+        len = len+1;
+        isVisit[i] = false;
+    }
+  }
+  xSemaphoreGive(visitSemaphore);
+// *****************************
+    report->group_num = len;
+    int period =9+ rand()%63;
+    xTimerChangePeriod(Transmit_timer_handle,M2T(period),10000);
+    dwNewTransmit(dev_timer);
+    dwSetDefaults(dev_timer);
+    dwSetData(dev_timer, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+sizeof(lpsp2mUNIPayload_t));
+    dwWaitForResponse(dev_timer, true);
+    dwStartTransmit(dev_timer);   
+}
+
+
+void startTransmitTimer(dwDevice_t *dev){
+  // create a binary semaphore for lock.
+  vSemaphoreCreateBinary(visitSemaphore);
+  if (visitSemaphore == NULL){
+    FAIL_PRINT("semaphore create fail\n");
+  }
+  dev_timer = dev;
+  //获取自身物理信息关联的ip
+  myAddress= 0xbccf000000000000|configblockGetRadioChannel();  //这个值每次都要动态的改
+  my_addr_idx = (uint8_t)findIndex(myAddress);
+  
+  vTaskDelay(5000);
+  
+  
+  Transmit_timer_handle = xTimerCreate("P2M_transmit_timer", M2T(150), pdFALSE, (void*)20, runTransmit);// run the transmit function
+  if(Transmit_timer_handle != NULL){
+    xTimerStart(Transmit_timer_handle, 0);
+  }
+}
+
+
+
+
 static void initiateRanging(dwDevice_t *dev)
 {
-  dwIdle(dev);
   dwNewReceive(dev);
   dwSetDefaults(dev);
   dwStartReceive(dev);
@@ -234,79 +303,23 @@ static uint32_t p2mDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
     case eventPacketSent:
       txcallback(dev);
       break;
-    case eventReceiveTimeout:   
+    case eventReceiveTimeout:
       dwNewReceive(dev);
       dwSetDefaults(dev);
       dwStartReceive(dev);
-      timeout_p2m = (timeout_p2m>MAX_UWB_RECEIVE_TIMEOUT ? timeout_p2m-MAX_UWB_RECEIVE_TIMEOUT : 0) ;
       break;
     case eventTimeout:  // 一直收不到，则重启全部对话
       initiateRanging(dev);
-      timeout_p2m=default_twr_interval;
       break;
     case eventReceiveFailed:
-      return 0;
+      initiateRanging(dev);
+      break;
   }
-  return timeout_p2m;
-}
-
-// ***********runTransmit()****************
-static TimerHandle_t Transmit_timer_handle = NULL;
-static dwDevice_t *dev_timer;
-// ************runTransmit()***************
-static void runTransmit(){
-
-  txPacket.destAddress=myAddress;
-  txPacket.sourceAddress=myAddress;
-  lpsp2mUNIPayload_t *report =(lpsp2mUNIPayload_t *)(txPacket.payload);
-  report->idx = curr_seq;
-  report->last_transmission_time = transmit_timer[ (curr_seq+NUM_CYC-1)%NUM_CYC ];
-  report->my_addr_idx = my_addr_idx;
-
-  uint8_t len = 0;
-  // accessing critical resource
-  while (true){
-    if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
-        break;
-    }
-  }
-  for (int i= 0 ;i<NUM_UAV;i++){
-    if(isVisit[i]){
-        memcpy(&report->received_group[len],&received_agent[i],sizeof(Agent_info));
-        len = len+1;
-        isVisit[i] = false;
-    }
-  }
-  xSemaphoreGive(visitSemaphore);
-// *****************************
-  report->group_num = len;
-  int period = 5 + rand()%(NUM_UAV*4);
-  xTimerChangePeriod(Transmit_timer_handle,M2T(period),10000);
-  dwNewTransmit(dev_timer);
-  dwSetDefaults(dev_timer);
-  dwSetData(dev_timer, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+sizeof(lpsp2mUNIPayload_t));
-  dwWaitForResponse(dev_timer, true);
-  dwStartTransmit(dev_timer);
+  return default_twr_interval;
 }
 
 
-void startTransmitTimer(dwDevice_t *dev){
-  // create a binary semaphore for lock.
-  vSemaphoreCreateBinary(visitSemaphore);
-  if (visitSemaphore == NULL){
-    FAIL_PRINT("semaphore create fail\n");
-  }
-  dev_timer = dev;
-  vTaskDelay(5000);
-  
-  //获取自身物理信息关联的ip
-  myAddress= 0xbccf000000000000|configblockGetRadioChannel();  //这个值每次都要动态的改
-  my_addr_idx = (uint8_t)findIndex(myAddress);
-  Transmit_timer_handle = xTimerCreate("P2M_transmit_timer", M2T(150), pdFALSE, (void*)20, runTransmit);// run the transmit function
-  if(Transmit_timer_handle != NULL){
-    xTimerStart(Transmit_timer_handle, 0);
-  }
-}
+
 
 static void p2mDistInit(dwDevice_t *dev)
 {
@@ -355,8 +368,11 @@ LOG_ADD(LOG_FLOAT, distance2peer20,&distances[1])
 LOG_ADD(LOG_FLOAT, distance2peer30,&distances[2])
 LOG_ADD(LOG_FLOAT, distance2peer40,&distances[3])
 LOG_ADD(LOG_FLOAT, distance2peer50,&distances[4])
+LOG_GROUP_STOP(peerdist)
+
+LOG_GROUP_START(peerdist2)
 LOG_ADD(LOG_FLOAT, distance2peer60,&distances[5])
 LOG_ADD(LOG_FLOAT, distance2peer70,&distances[6])
 LOG_ADD(LOG_FLOAT, distance2peer80,&distances[7])
 LOG_ADD(LOG_FLOAT, distance2peer90,&distances[8])
-LOG_GROUP_STOP(peerdist)
+LOG_GROUP_STOP(peerdist2)

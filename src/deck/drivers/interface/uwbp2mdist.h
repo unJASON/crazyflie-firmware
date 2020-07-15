@@ -39,7 +39,7 @@ typedef struct {
   uint8_t group_num;
   uint16_t idx; //index of transmission
   dwTime_t last_transmission_time;  // last transmission timestamp
-  Agent_info received_group[8]; //3 group member
+  Agent_info received_group[8]; //group member
 } __attribute__((packed)) lpsp2mUNIPayload_t;
 
 typedef struct{

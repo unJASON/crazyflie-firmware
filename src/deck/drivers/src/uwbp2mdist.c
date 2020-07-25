@@ -86,17 +86,23 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 {  
   dwTime_t arival = { .full=0 };
   dwGetReceiveTimestamp(dev, &arival);    //获取收到报文时的时间戳
-  
+
 
   int dataLength = dwGetDataLength(dev);
   if (dataLength == 0) {
     // in case the error packet
     dwNewReceive(dev);
-    dwSetDefaults(dev);
+    // dwSetDefaults(dev);
     dwStartReceive(dev);
     return timeout_p2m;
   }
-
+  
+  // accessing critical resource
+  while (true){
+    if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
+        break;
+    }
+  }
   memset(&rxPacket, 0, MAC802154_HEADER_LENGTH);
   dwGetData(dev, (uint8_t*)&rxPacket, dataLength);
 
@@ -106,25 +112,17 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   cache_index = rxPacket.sourceAddress; // index from received packet
   if (cache_index == my_addr_idx ||cache_index >= NUM_UAV || cache_index <0)
   {
-    DEBUG_PRINT("idx_err: %u\n",cache_index);
     dwNewReceive(dev);
-    dwSetDefaults(dev);
+    // dwSetDefaults(dev);
     dwStartReceive(dev);
+    xSemaphoreGive(visitSemaphore);
     return timeout_p2m;
-  }
-  // accessing critical resource
-  while (true){
-    if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
-        break;
-    }
   }
   isVisit[cache_index] = true;    //set the visit flag, semaphore is required in the future.
   received_agent[cache_index].agent_idx = cache_index;
   received_agent[cache_index].received_timestamp = arival;
   received_agent[cache_index].answer_idx = report->idx;
-   // release semaphore
-  xSemaphoreGive(visitSemaphore);
-
+  
   //***************
   bool isContain = false;
   for (i = 0; i < report->group_num;i++){
@@ -214,11 +212,13 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
       old_cache[cache_index].agent_transmission_idx = report->idx;
   }
  
- 
+  
 
-  dwNewReceive(dev);
-  dwSetDefaults(dev);
+   dwNewReceive(dev);
+  // dwSetDefaults(dev);
   dwStartReceive(dev);
+  // release semaphore
+  xSemaphoreGive(visitSemaphore);
   return timeout_p2m;
 }
 
@@ -228,6 +228,8 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 // ***********runTransmit()****************
 static TimerHandle_t Transmit_timer_handle = NULL;
 static dwDevice_t *dev_timer;
+static int const_p[NUM_UAV] = {10,10,10,10,10,10,10,10,10};
+static int rand_p[NUM_UAV]={81,81,81,81,81,81,81,81,81};
 // ************runTransmit()***************
 static void runTransmit(){
 
@@ -250,16 +252,16 @@ static void runTransmit(){
         isVisit[i] = false;
     }
   }
-  xSemaphoreGive(visitSemaphore);
-// *****************************
     report->group_num = len;
-    int period =9+ rand()%63;
+    int period = const_p[my_addr_idx] + rand()%rand_p[my_addr_idx];
     xTimerChangePeriod(Transmit_timer_handle,M2T(period),10000);
     dwNewTransmit(dev_timer);
-    dwSetDefaults(dev_timer);
+    // dwSetDefaults(dev_timer);
     dwSetData(dev_timer, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+sizeof(lpsp2mUNIPayload_t));
     dwWaitForResponse(dev_timer, true);
-    dwStartTransmit(dev_timer);   
+    dwStartTransmit(dev_timer);
+    xSemaphoreGive(visitSemaphore);
+  // *****************************
 }
 
 
@@ -270,13 +272,13 @@ void startTransmitTimer(dwDevice_t *dev){
     FAIL_PRINT("semaphore create fail\n");
   }
   dev_timer = dev;
-  //获取自身物理信息关联的ip
+   //获取自身物理信息关联的ip
   myAddress= 0xbccf000000000000|configblockGetRadioChannel();  //这个值每次都要动态的改
   my_addr_idx = (uint8_t)findIndex(myAddress);
-  
+   
   vTaskDelay(5000);
   
-  
+
   Transmit_timer_handle = xTimerCreate("P2M_transmit_timer", M2T(150), pdFALSE, (void*)20, runTransmit);// run the transmit function
   if(Transmit_timer_handle != NULL){
     xTimerStart(Transmit_timer_handle, 0);
@@ -289,7 +291,7 @@ void startTransmitTimer(dwDevice_t *dev){
 static void initiateRanging(dwDevice_t *dev)
 {
   dwNewReceive(dev);
-  dwSetDefaults(dev);
+  // dwSetDefaults(dev);
   dwStartReceive(dev);
 }
 
@@ -297,7 +299,6 @@ static uint32_t p2mDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
   switch(event) {
     case eventPacketReceived:
-      timeout_p2m=default_twr_interval;   //收到包，重置时钟
       rxcallback(dev);
       break;
     case eventPacketSent:
@@ -305,7 +306,7 @@ static uint32_t p2mDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       break;
     case eventReceiveTimeout:
       dwNewReceive(dev);
-      dwSetDefaults(dev);
+      // dwSetDefaults(dev);
       dwStartReceive(dev);
       break;
     case eventTimeout:  // 一直收不到，则重启全部对话

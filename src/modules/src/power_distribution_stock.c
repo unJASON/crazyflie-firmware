@@ -23,13 +23,17 @@
  *
  * power_distribution_stock.c - Crazyflie stock power distribution code
  */
+#define DEBUG_MODULE "PWR_DIST"
+
 #include "power_distribution.h"
 
+#include <string.h>
 #include "log.h"
 #include "param.h"
 #include "num.h"
-
+#include "platform.h"
 #include "motors.h"
+#include "debug.h"
 
 static bool motorSetEnable = false;
 
@@ -49,7 +53,7 @@ static struct {
 
 void powerDistributionInit(void)
 {
-  motorsInit(motorMapDefaultBrushed);
+  motorsInit(platformConfigGetMotorMapping());
 }
 
 bool powerDistributionTest(void)
@@ -113,11 +117,11 @@ PARAM_ADD(PARAM_UINT16, m1, &motorPowerSet.m1)
 PARAM_ADD(PARAM_UINT16, m2, &motorPowerSet.m2)
 PARAM_ADD(PARAM_UINT16, m3, &motorPowerSet.m3)
 PARAM_ADD(PARAM_UINT16, m4, &motorPowerSet.m4)
-PARAM_GROUP_STOP(ring)
+PARAM_GROUP_STOP(motorPowerSet)
 
 LOG_GROUP_START(motor)
-LOG_ADD(LOG_INT32, m4, &motorPower.m4)
-LOG_ADD(LOG_INT32, m1, &motorPower.m1)
-LOG_ADD(LOG_INT32, m2, &motorPower.m2)
-LOG_ADD(LOG_INT32, m3, &motorPower.m3)
+LOG_ADD(LOG_UINT32, m1, &motorPower.m1)
+LOG_ADD(LOG_UINT32, m2, &motorPower.m2)
+LOG_ADD(LOG_UINT32, m3, &motorPower.m3)
+LOG_ADD(LOG_UINT32, m4, &motorPower.m4)
 LOG_GROUP_STOP(motor)

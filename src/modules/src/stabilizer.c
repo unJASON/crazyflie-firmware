@@ -49,6 +49,8 @@
 #include "estimator.h"
 #include "usddeck.h"
 #include "quatcompress.h"
+#include "statsCnt.h"
+#include "static_mem.h"
 
 static bool isInit;
 static bool emergencyStop = false;
@@ -74,6 +76,8 @@ typedef enum { configureAcc, measureNoiseFloor, measureProp, testBattery, restar
 #else
   static TestState testState = testDone;
 #endif
+
+static STATS_CNT_RATE_DEFINE(stabilizerRate, 500);
 
 static struct {
   // position - mm
@@ -122,6 +126,7 @@ static float accVarZ[NBR_OF_MOTORS];
 static uint8_t motorPass = 0;
 static uint16_t motorTestCount = 0;
 
+STATIC_MEM_TASK_ALLOC(stabilizerTask, STABILIZER_TASK_STACKSIZE);
 
 static void stabilizerTask(void* param);
 static void testProps(sensorData_t *sensors);
@@ -183,15 +188,11 @@ void stabilizerInit(StateEstimatorType estimator)
   stateEstimatorInit(estimator);
   controllerInit(ControllerTypeAny);
   powerDistributionInit();
-  if (estimator == kalmanEstimator)
-  {
-    sitAwInit();
-  }
+  sitAwInit();
   estimatorType = getStateEstimator();
   controllerType = getControllerType();
 
-  xTaskCreate(stabilizerTask, STABILIZER_TASK_NAME,
-              STABILIZER_TASK_STACKSIZE, NULL, STABILIZER_TASK_PRI, NULL);
+  STATIC_MEM_TASK_CREATE(stabilizerTask, stabilizerTask, STABILIZER_TASK_NAME, NULL, STABILIZER_TASK_PRI);
 
   isInit = true;
 }
@@ -261,7 +262,7 @@ static void stabilizerTask(void* param)
     } else {
       // allow to update estimator dynamically
       if (getStateEstimator() != estimatorType) {
-        stateEstimatorInit(estimatorType);
+        stateEstimatorSwitchTo(estimatorType);
         estimatorType = getStateEstimator();
       }
       // allow to update controller dynamically
@@ -272,7 +273,7 @@ static void stabilizerTask(void* param)
 
       stateEstimator(&state, &sensorData, &control, tick);
       compressState();
-      
+
       commanderGetSetpoint(&setpoint, &state);
       compressSetpoint();
 
@@ -297,6 +298,7 @@ static void stabilizerTask(void* param)
     }
     calcSensorToOutputLatency(&sensorData);
     tick++;
+    STATS_CNT_RATE_EVENT(&stabilizerRate);
   }
 }
 
@@ -356,9 +358,9 @@ static bool evaluateTest(float low, float high, float value, uint8_t motor)
 static void testProps(sensorData_t *sensors)
 {
   static uint32_t i = 0;
-  static float accX[PROPTEST_NBR_OF_VARIANCE_VALUES];
-  static float accY[PROPTEST_NBR_OF_VARIANCE_VALUES];
-  static float accZ[PROPTEST_NBR_OF_VARIANCE_VALUES];
+  NO_DMA_CCM_SAFE_ZERO_INIT static float accX[PROPTEST_NBR_OF_VARIANCE_VALUES];
+  NO_DMA_CCM_SAFE_ZERO_INIT static float accY[PROPTEST_NBR_OF_VARIANCE_VALUES];
+  NO_DMA_CCM_SAFE_ZERO_INIT static float accZ[PROPTEST_NBR_OF_VARIANCE_VALUES];
   static float accVarXnf;
   static float accVarYnf;
   static float accVarZnf;
@@ -530,6 +532,7 @@ PARAM_GROUP_STOP(health)
 PARAM_GROUP_START(stabilizer)
 PARAM_ADD(PARAM_UINT8, estimator, &estimatorType)
 PARAM_ADD(PARAM_UINT8, controller, &controllerType)
+PARAM_ADD(PARAM_UINT8, stop, &emergencyStop)
 PARAM_GROUP_STOP(stabilizer)
 
 LOG_GROUP_START(health)
@@ -581,7 +584,10 @@ LOG_GROUP_START(stabilizer)
 LOG_ADD(LOG_FLOAT, roll, &state.attitude.roll)
 LOG_ADD(LOG_FLOAT, pitch, &state.attitude.pitch)
 LOG_ADD(LOG_FLOAT, yaw, &state.attitude.yaw)
-LOG_ADD(LOG_UINT16, thrust, &control.thrust)
+LOG_ADD(LOG_FLOAT, thrust, &control.thrust)
+
+STATS_CNT_RATE_LOG_ADD(rtStab, &stabilizerRate)
+LOG_ADD(LOG_UINT32, intToOut, &inToOutLatency)
 LOG_GROUP_STOP(stabilizer)
 
 LOG_GROUP_START(acc)
@@ -670,8 +676,3 @@ LOG_ADD(LOG_INT16, rateRoll, &stateCompressed.rateRoll)   // angular velocity - 
 LOG_ADD(LOG_INT16, ratePitch, &stateCompressed.ratePitch)
 LOG_ADD(LOG_INT16, rateYaw, &stateCompressed.rateYaw)
 LOG_GROUP_STOP(stateEstimateZ)
-
-LOG_GROUP_START(latency)
-LOG_ADD(LOG_UINT32, intToOut, &inToOutLatency)
-LOG_GROUP_STOP(latency)
-

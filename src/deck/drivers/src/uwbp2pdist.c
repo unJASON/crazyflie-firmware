@@ -10,7 +10,7 @@
 #include "console.h"
 
 #define ANTENNA_OFFSET 154.6   // In meter
-#define NUM_UAV 3       //当前无人机数量
+#define NUM_UAV 9       //当前无人机数量
 
 
 static int ANTENNA_DELAY = (ANTENNA_OFFSET*499.2e6*128)/299792458.0; // In radio tick
@@ -22,12 +22,27 @@ static dwTime_t answer_tx;
 static dwTime_t answer_rx;
 static dwTime_t final_tx;
 static dwTime_t final_rx;
-static float distances[NUM_UAV]={0.0,0.0,0.0};
-static locoAddress_t fullAddress[NUM_UAV]={0xbccf000000000000|50,0xbccf000000000000|85,0xbccf000000000000|95}; 
+static float distances[NUM_UAV]={0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
+static locoAddress_t fullAddress[NUM_UAV]={
+                          0xbccf000000000000|10,
+                          0xbccf000000000000|20,
+                          0xbccf000000000000|30,
+                          0xbccf000000000000|40,
+                          0xbccf000000000000|50,
+                          0xbccf000000000000|60,
+                          0xbccf000000000000|70,
+                          0xbccf000000000000|80,
+                          0xbccf000000000000|90,
+                      }; 
 static locoAddress_t myAddress;  //store my ownAddress
 static packet_t txPacket;   //发送的包
 
+static uint32_t rx_cnt[9]={0,0,0,0,0,0,0,0,0};
+static uint32_t ranging_cnt[9]={0,0,0,0,0,0,0,0,0}; 
+
 static volatile uint8_t curr_seq = 0;  //序号用于标记一次测距，防止错乱
+
+static volatile uint8_t rec_seq = 0;
 // static int flush_cnt = 0;
 
 float pressure = 0;        
@@ -35,8 +50,13 @@ float temperature = 0;
 float asl = 0;
 bool pressure_ok = true;
 
-static uint32_t timeout_p2p=0;
-static uint32_t default_twr_interval=8000;   //设置最大超时重传poll报文的时间
+static uint32_t timeout_p2p=2;
+static uint32_t default_twr_interval=2;   //设置最大超时重传poll报文的时间
+
+static uint32_t isToken=0;   
+static packet_t cachePacket;
+static bool isFirstTime=true;
+
 locoAddress_t nextAddress(locoAddress_t s)    //用于返回下一架无人机中的地址，我们将逻辑顺序暂时写死
 {
    for(int i=0;i<NUM_UAV;i++)
@@ -65,20 +85,25 @@ static void txcallback(dwDevice_t *dev)    //发送报文的回调函数
   switch (txPacket.payload[0]) {
     case LPS_P2P_POLL:
       //DEBUG_PRINT("sent LPS_P2P_POLL\n");
+      
       poll_tx = departure;
       break;
     case LPS_P2P_FINAL:
+      
       //DEBUG_PRINT("sent LPS_P2P_FINAL\n");
       final_tx = departure;
       break;
     case LPS_P2P_ANSWER:
+      
       //DEBUG_PRINT("sent LPS_P2P_ANSWER to %02x at %04x\n", (unsigned int)txPacket.destAddress, (unsigned int)departure.low32);
       answer_tx = departure;
       break;
     case LPS_P2P_REPORT:
+      
       //DEBUG_PRINT("sent LPS_P2P_REPORT\n");
       break;
     case LPS_P2P_INFORM:
+     
       //DEBUG_PRINT("sent LPS_P2P_INFORM\n")
       break;
   }
@@ -115,12 +140,12 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
         dwNewReceive(dev);
         dwSetDefaults(dev);
         dwStartReceive(dev);
-        return 0;
+        return timeout_p2p;
       }
 // DEBUG_PRINT("POLL\n");
       
       // curr_seq=rxPacket.payload[LPS_P2P_SEQ];//modify sequence
-
+      isToken=0;
       txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_ANSWER;
       txPacket.payload[LPS_P2P_SEQ] = rxPacket.payload[LPS_P2P_SEQ];
       txPacket.destAddress=rxPacket.sourceAddress;
@@ -140,7 +165,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
       dwNewReceive(dev);
       dwSetDefaults(dev);
       dwStartReceive(dev);
-      return 0;
+      return timeout_p2p;
     }
 // DEBUG_PRINT("ANS\n");
 
@@ -151,6 +176,9 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
      
       arival.full -= (ANTENNA_DELAY / 2);
       answer_rx = arival;
+      //store cachePackect for retrans
+      memset(&cachePacket, 0, MAC802154_HEADER_LENGTH);
+      memcpy(&cachePacket,&txPacket,MAC802154_HEADER_LENGTH+2);
       dwNewTransmit(dev);
       dwSetDefaults(dev);
       dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);  //将做需要的计算数据传输过去
@@ -162,7 +190,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
         dwNewReceive(dev);
         dwSetDefaults(dev);
         dwStartReceive(dev);
-        return 0;
+        return timeout_p2p;
       }
       // DEBUG_PRINT("FIN\n");
       lpsp2pTagReportPayload_t *report = (lpsp2pTagReportPayload_t *)(txPacket.payload+2);
@@ -197,7 +225,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
         dwNewReceive(dev);
         dwSetDefaults(dev);
         dwStartReceive(dev);
-        return 0;
+        return timeout_p2p;
       }
       // DEBUG_PRINT("REPT\n"); 
 
@@ -216,7 +244,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
       tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
       tprop = tprop_ctn / LOCODECK_TS_FREQ;
       distances[findIndex(rxPacket.sourceAddress)] = SPEED_OF_LIGHT * tprop;   //将距离存在适当的位置
-    
+      ranging_cnt[findIndex(rxPacket.sourceAddress)]++;
 // DEBUG_PRINT("d=%d\n",(int)(100*distances[findIndex(rxPacket.sourceAddress)]));
       if(nextAddress(rxPacket.sourceAddress)!=myAddress)  //距离信息还没收集满,因为最后一次采集是我的逻辑上家,则发送一次poll报文
       {
@@ -224,6 +252,9 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
         txPacket.destAddress = nextAddress(rxPacket.sourceAddress);
         txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
         txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;  //这里是非常重要的，保证是同一次测距
+        //store cachePackect for retrans
+        memset(&cachePacket, 0, MAC802154_HEADER_LENGTH+2);
+        memcpy(&cachePacket,&txPacket,MAC802154_HEADER_LENGTH+2);
         dwNewTransmit(dev);
         dwSetDefaults(dev);
         dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
@@ -233,10 +264,14 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
       }
       else    //距离信息已经收集满，则发inform报文，通知下一家开始采集邻居数据
       {
+        //isToken=1;
         txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_INFORM;
         txPacket.payload[LPS_P2P_SEQ] = rxPacket.payload[LPS_P2P_SEQ];
         txPacket.sourceAddress = myAddress;
         txPacket.destAddress = nextAddress(myAddress);  //逻辑环路中的下一架无人机
+        //store cachePackect for retrans
+        memset(&cachePacket, 0, MAC802154_HEADER_LENGTH+2);
+        memcpy(&cachePacket,&txPacket,MAC802154_HEADER_LENGTH+2);
         dwNewTransmit(dev);
         dwSetDefaults(dev);
         dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);  //
@@ -255,12 +290,17 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
           dwNewReceive(dev);
           dwSetDefaults(dev);
           dwStartReceive(dev);
-          return 0;   
+          return timeout_p2p;   
         }  
-        else     //是给我的通知
+        else if(rxPacket.payload[LPS_P2P_SEQ]!=rec_seq)   //是给我的通知
         {
+          isToken=1;
+          rec_seq=rxPacket.payload[LPS_P2P_SEQ];
           // DEBUG_PRINT("receiving inform from %d\n", (unsigned int)rxPacket.sourceAddress);
           txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
+          //store cachePackect for retrans
+          memset(&cachePacket, 0, MAC802154_HEADER_LENGTH+2);
+          memcpy(&cachePacket,&txPacket,MAC802154_HEADER_LENGTH+2);
           txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
           txPacket.destAddress=nextAddress(myAddress);  //允许逻辑下家
           txPacket.sourceAddress = myAddress;
@@ -277,30 +317,36 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 
 static void initiateRanging(dwDevice_t *dev)     //在这个函数中实现指定第一架飞机发起poll报文，开启整个会话
 {
-  dwIdle(dev);
-
-  memset(&poll_tx, 0, sizeof(poll_tx));
-  memset(&poll_rx, 0, sizeof(poll_rx));
-  memset(&answer_tx, 0, sizeof(answer_tx));
-  memset(&answer_rx, 0, sizeof(answer_rx));
-  memset(&final_tx, 0, sizeof(final_tx));
-  memset(&final_rx, 0, sizeof(final_rx));
-
-  // curr_seq = 0;
-
-  pressure = temperature = asl = 0;
-  pressure_ok = true;
-
-  //获取自身物理信息关联的ip
-  int myChanel = configblockGetRadioChannel();
-  myAddress=0xbccf000000000000|myChanel;  //这个值每次都要动态的改
-  // DEBUG_PRINT("channel is %d,myAddress: %d \n",configblockGetRadioChannel(),(unsigned int)myAddress);
-  if(myAddress==fullAddress[0])   //如果不是逻辑第一架，则不发送poll报文
+  if(isFirstTime)
   {
+    dwIdle(dev);
+
+    memset(&poll_tx, 0, sizeof(poll_tx));
+    memset(&poll_rx, 0, sizeof(poll_rx));
+    memset(&answer_tx, 0, sizeof(answer_tx));
+    memset(&answer_rx, 0, sizeof(answer_rx));
+    memset(&final_tx, 0, sizeof(final_tx));
+    memset(&final_rx, 0, sizeof(final_rx));
+    // curr_seq = 0;
+
+    pressure = temperature = asl = 0;
+    pressure_ok = true;
+
+    //获取自身物理信息关联的ip
+    int myChanel = configblockGetRadioChannel();
+    myAddress=0xbccf000000000000|myChanel;  //这个值每次都要动态的改
+    // DEBUG_PRINT("channel is %d,myAddress: %d \n",configblockGetRadioChannel(),(unsigned int)myAddress);
+  }
+  if(myAddress==fullAddress[0]&&isFirstTime)   //如果不是逻辑第一架，则不发送poll报文
+  {
+    isToken=1;
     txPacket.sourceAddress = fullAddress[0]; 
     txPacket.destAddress = fullAddress[1];
     txPacket.payload[LPS_P2P_TYPE] = LPS_P2P_POLL;
     txPacket.payload[LPS_P2P_SEQ] = ++curr_seq;
+    //store cachePackect for retrans
+    memset(&cachePacket, 0, MAC802154_HEADER_LENGTH+2);
+    memcpy(&cachePacket,&txPacket,MAC802154_HEADER_LENGTH+2);
     dwNewTransmit(dev);
     dwSetDefaults(dev);
     dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
@@ -314,6 +360,7 @@ static void initiateRanging(dwDevice_t *dev)     //在这个函数中实现指�
     dwSetDefaults(dev);
     dwStartReceive(dev);
   }
+  isFirstTime=false;
 }
 
 static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
@@ -336,8 +383,20 @@ static uint32_t p2pDistOnEvent(dwDevice_t *dev, uwbEvent_t event)
       timeout_p2p = (timeout_p2p>MAX_UWB_RECEIVE_TIMEOUT ? timeout_p2p-MAX_UWB_RECEIVE_TIMEOUT : 0) ;
       break;
     case eventTimeout:  // 一直收不到，则重启全部对话
-      //DEBUG_PRINT("eT\n"),
-      initiateRanging(dev);
+      //DEBUG_PRINT("eT\n")
+      //has token only retrans
+      if(isToken==1)
+      {
+        //memcpy(&txPacket,&cachePacket,MAC802154_HEADER_LENGTH+2);
+        dwNewTransmit(dev);
+        dwSetDefaults(dev);
+        dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2); 
+        dwWaitForResponse(dev, true);
+        dwStartTransmit(dev);
+      }
+      else{
+        initiateRanging(dev);
+      }
       timeout_p2p=default_twr_interval;
       break;
     case eventReceiveFailed:
@@ -392,3 +451,33 @@ LOG_ADD(LOG_FLOAT, distance2peer10,&distances[0])
 LOG_ADD(LOG_FLOAT, distance2peer20,&distances[1])
 LOG_ADD(LOG_FLOAT, distance2peer30,&distances[2])
 LOG_GROUP_STOP(peerdist)
+
+LOG_GROUP_START(rxCNT)
+LOG_ADD(LOG_UINT32,rxcnt10,&rx_cnt[0])
+LOG_ADD(LOG_UINT32,rxcnt20,&rx_cnt[1])
+LOG_ADD(LOG_UINT32,rxcnt30,&rx_cnt[2])
+LOG_ADD(LOG_UINT32,rxcnt40,&rx_cnt[3])
+LOG_ADD(LOG_UINT32,rxcnt50,&rx_cnt[4])
+LOG_GROUP_STOP(rxCNT)
+
+LOG_GROUP_START(rxCNT2)
+LOG_ADD(LOG_UINT32,rxcnt60,&rx_cnt[5])
+LOG_ADD(LOG_UINT32,rxcnt70,&rx_cnt[6])
+LOG_ADD(LOG_UINT32,rxcnt80,&rx_cnt[7])
+LOG_ADD(LOG_UINT32,rxcnt90,&rx_cnt[8])
+LOG_GROUP_STOP(rxCNT2)
+
+LOG_GROUP_START(rangingCNT)
+LOG_ADD(LOG_UINT32,rangingcnt10,&ranging_cnt[0])
+LOG_ADD(LOG_UINT32,rangingcnt20,&ranging_cnt[1])
+LOG_ADD(LOG_UINT32,rangingcnt30,&ranging_cnt[2])
+LOG_ADD(LOG_UINT32,rangingcnt40,&ranging_cnt[3])
+LOG_ADD(LOG_UINT32,rangingcnt50,&ranging_cnt[4])
+LOG_GROUP_STOP(rangingCNT)
+
+LOG_GROUP_START(rangingCNT2)
+LOG_ADD(LOG_UINT32,rangingcnt60,&ranging_cnt[5])
+LOG_ADD(LOG_UINT32,rangingcnt70,&ranging_cnt[6])
+LOG_ADD(LOG_UINT32,rangingcnt80,&ranging_cnt[7])
+LOG_ADD(LOG_UINT32,rangingcnt90,&ranging_cnt[8])
+LOG_GROUP_STOP(rangingCNT2)

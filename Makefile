@@ -334,6 +334,11 @@ CFLAGS += -ffunction-sections -fdata-sections
 # Prevent promoting floats to doubles
 CFLAGS += -Wdouble-promotion
 
+# add lighthouse deck
+# CFLAGS += -DDISABLE_LIGHTHOUSE_DRIVER=0
+
+# use UWB alt pins
+# CFLAGS += -DLOCODECK_USE_ALT_PINS
 
 ASFLAGS = $(PROCESSOR) $(INCLUDES)
 LDFLAGS = --specs=nosys.specs --specs=nano.specs $(PROCESSOR) -Wl,-Map=$(PROG).map,--cref,--gc-sections,--undefined=uxTopUsedPriority

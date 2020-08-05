@@ -212,7 +212,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
               distances[cache_index] = tprop;
           }else{
               // impossible situation
-              // distances[cache_index] = -0.1;
+              distances[cache_index] = -0.1;
               // tprop = tprop_ctn *(0.004691);
               // distances[cache_index] = tprop;
               // DEBUG_PRINT("%d\n",cache_index);
@@ -296,6 +296,7 @@ static void runTransmit(){
     
     // select the group
     if ( (i!=my_addr_idx) && isVisit[i] ){
+      isVisit[i] = false;
       // only calculate visited one's period
       if (distances[i]>0 && agent_velocity[i]>0 && agent_velocity[i]<5){
           group_peiod[i] = ((float)ratio_e)*distances[i]/(agent_velocity[i]+report->velocity);
@@ -322,7 +323,6 @@ static void runTransmit(){
   }
   // reset isVisit waiting period 
   for (uint8_t i = 0;i<taken;i++){
-    isVisit[chosen_group[i]]=false;
     memcpy(&report->received_group[i],&received_agent[chosen_group[i]],sizeof(Agent_info));
     agent_countdown[chosen_group[i]] = (int)(group_peiod[chosen_group[i]]);
   }

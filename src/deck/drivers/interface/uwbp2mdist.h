@@ -39,7 +39,7 @@ typedef struct{
 
 // for each timestamp 5 Bytes is required
 typedef struct {
-  uint8_t group_num;
+  uint8_t group_num; //本次报文包含多少有效的时间戳信息
   float velocity;
   uint16_t idx; //index of transmission
   dwTime_t last_transmission_time;  // last transmission timestamp

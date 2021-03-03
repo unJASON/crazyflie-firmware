@@ -15,6 +15,7 @@
 #define LPS_P2M_TYPE 0
 #define LPS_P2M_SEQ 1
 
+#define GROUP_SIZE 8
 extern uwbAlgorithm_t uwbP2MDistAlgorithm;
 
 typedef struct {
@@ -39,7 +40,7 @@ typedef struct {
   uint8_t group_num;
   uint16_t idx; //index of transmission
   dwTime_t last_transmission_time;  // last transmission timestamp
-  Agent_info received_group[8]; //group member
+  Agent_info received_group[GROUP_SIZE]; //group member
 } __attribute__((packed)) lpsp2mUNIPayload_t;
 
 typedef struct{

@@ -10,10 +10,16 @@
 #include "semphr.h"
 #include "timers.h"
 #include <stdlib.h>
+#include "locdeck_antenna_delay.h"
+
+//for auto flying
+#include "deck.h"
+#include "system.h"
+#include "commander.h"
 
 #define ANTENNA_OFFSET 154.33   // In meter
 
-#define NUM_UAV 9       //当前无人机数量
+#define NUM_UAV 10       //当前无人机数量
 #define NUM_CYC 1000      // number of transmit cycle stored in memory
 static int ANTENNA_DELAY = (ANTENNA_OFFSET*499.2e6*128)/299792458.0; // In radio tick
 
@@ -26,13 +32,16 @@ static dwTime_t final_tx;
 static dwTime_t final_rx;
 
 
-static float distances[NUM_UAV]={0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
-static locoAddress_t fullAddress[NUM_UAV]={0xbccf000000000000|10,0xbccf000000000000|20,0xbccf000000000000|30,
-                                            0xbccf000000000000|40,0xbccf000000000000|50,0xbccf000000000000|60,
-                                            0xbccf000000000000|70,0xbccf000000000000|80,0xbccf000000000000|90}; 
-static bool isVisit[NUM_UAV] = {false,false,false,false,false,false,false,false,false};
+static int agent_countdown[NUM_UAV]={0,0,0,0,0,0,0,0,0,0}; //countdown for transmitting
+static float distances[NUM_UAV]={10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0};
+static locoAddress_t fullAddress[NUM_UAV]={
+  0xbccf000000000000|24,0xbccf000000000000|28,0xbccf000000000000|33,
+  0xbccf000000000000|37,0xbccf000000000000|1,0xbccf000000000000|2,
+  0xbccf000000000000|5,0xbccf000000000000|4,0xbccf000000000000|3,
+  0xbccf000000000000|6}; 
+static bool isVisit[NUM_UAV] = {false,false,false,false,false,false,false,false,false,false};
 
-static locoAddress_t myAddress;  //store my ownAddress
+static locoAddress_t myAddress;  //store my ownAddress27
 static uint8_t my_addr_idx;             //store my index
 
 static packet_t txPacket;   //发送的包
@@ -96,7 +105,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
     dwStartReceive(dev);
     return timeout_p2m;
   }
-  
+
   // accessing critical resource
   while (true){
     if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
@@ -111,7 +120,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 
   cache_index = rxPacket.sourceAddress; // index from received packet
   if (cache_index == my_addr_idx ||cache_index >= NUM_UAV || cache_index <0)
-  {
+{
     dwNewReceive(dev);
     // dwSetDefaults(dev);
     dwStartReceive(dev);
@@ -122,7 +131,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   received_agent[cache_index].agent_idx = cache_index;
   received_agent[cache_index].received_timestamp = arival;
   received_agent[cache_index].answer_idx = report->idx;
-  
+
   //***************
   bool isContain = false;
   for (i = 0; i < report->group_num;i++){
@@ -185,14 +194,14 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
           tprop_ctn = (difference1 * treply2 + difference2*treply1 + difference2* difference1)/( (tround1 + tround2 + treply1 + treply2));
           
           
-          if (tprop_ctn >= -2000 && tprop_ctn <=3200) {
+          if (tprop_ctn >= 0 && tprop_ctn <=3200) {
               // tprop = tprop_ctn/LOCODECK_TS_FREQ;
               // distances[cache_index] = SPEED_OF_LIGHT * tprop;
               tprop = tprop_ctn *(0.004691);
               distances[cache_index] = tprop;
           }else{
               // impossible situation
-              distances[cache_index] = -0.1;
+              // distances[cache_index] = -0.1;
           }
 
       }else{
@@ -213,13 +222,13 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   }
  
   
-
-   dwNewReceive(dev);
+  
+  dwNewReceive(dev);
   // dwSetDefaults(dev);
   dwStartReceive(dev);
   // release semaphore
   xSemaphoreGive(visitSemaphore);
-  return timeout_p2m;
+    return timeout_p2m;
 }
 
 
@@ -228,8 +237,10 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 // ***********runTransmit()****************
 static TimerHandle_t Transmit_timer_handle = NULL;
 static dwDevice_t *dev_timer;
-static int const_p[NUM_UAV] = {10,10,10,10,10,10,10,10,10};
-static int rand_p[NUM_UAV]={81,81,81,81,81,81,81,81,81};
+static int chosen_group[GROUP_SIZE]={-1,-1,-1,-1,-1,-1,-1,-1};
+static int const_p[NUM_UAV] = {15,15,15,15,15,15,15,15,15,15};
+static int rand_p[NUM_UAV]={21,21,21,21,81,81,81,81,81,81};
+uint8_t swap = 0,tmp = 0;
 // ************runTransmit()***************
 static void runTransmit(){
 
@@ -245,22 +256,49 @@ static void runTransmit(){
         break;
     }
   }
-  for (uint8_t i= 0 ;i<NUM_UAV;i++){
-    if( (i!= my_addr_idx) && isVisit[i]){
-        memcpy(&report->received_group[len],&received_agent[i],sizeof(Agent_info));
-        len = len+1;
-        isVisit[i] = false;
+  //choose minimun top K
+  uint8_t taken = 0;
+  for(uint8_t i = 0; i < NUM_UAV; i++){
+    if( (i != my_addr_idx) && isVisit[i]){
+      isVisit[i] = false;
+      // only calculate visited one's period
+      if(taken <GROUP_SIZE){
+        chosen_group[taken] = i;
+        taken +=1;
+      }else{
+        // if full then swap the max
+        swap = i;
+        for (uint8_t j = 0; j < GROUP_SIZE; j++){
+          if(agent_countdown[swap] < agent_countdown[chosen_group[j]]){
+            tmp = chosen_group[j];
+            chosen_group[j]=swap;
+            swap = tmp;
+          }
+        }
+      }
     }
   }
-    report->group_num = len;
-    int period = const_p[my_addr_idx] + rand()%rand_p[my_addr_idx];
-    xTimerChangePeriod(Transmit_timer_handle,M2T(period),10000);
-    dwNewTransmit(dev_timer);
-    // dwSetDefaults(dev_timer);
-    dwSetData(dev_timer, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+sizeof(lpsp2mUNIPayload_t));
-    dwWaitForResponse(dev_timer, true);
-    dwStartTransmit(dev_timer);
-    xSemaphoreGive(visitSemaphore);
+  //reset isVisit waiting period
+  for (uint8_t i = 0;i<taken;i++){
+    memcpy(&report->received_group[i],&received_agent[chosen_group[i]],sizeof(Agent_info));
+    agent_countdown[chosen_group[i]]= const_p[chosen_group[i]]+ rand_p[chosen_group[i]]/2;
+  }
+  len = taken;
+  int period = const_p[my_addr_idx] + rand()%rand_p[my_addr_idx];
+  for (uint8_t i = 0; i < NUM_UAV; i++)
+  {
+    if(agent_countdown[i]>=-10000){
+      agent_countdown[i] = agent_countdown[i] - period;
+    }
+  }
+  report->group_num = len;
+  xTimerChangePeriod(Transmit_timer_handle,M2T(period),10000);
+  dwNewTransmit(dev_timer);
+  // dwSetDefaults(dev_timer);
+  dwSetData(dev_timer, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+sizeof(lpsp2mUNIPayload_t));
+  dwWaitForResponse(dev_timer, true);
+  dwStartTransmit(dev_timer);
+  xSemaphoreGive(visitSemaphore);
   // *****************************
 }
 
@@ -272,10 +310,11 @@ void startTransmitTimer(dwDevice_t *dev){
     FAIL_PRINT("semaphore create fail\n");
   }
   dev_timer = dev;
+  int channel = configblockGetRadioChannel();
    //获取自身物理信息关联的ip
-  myAddress= 0xbccf000000000000|configblockGetRadioChannel();  //这个值每次都要动态的改
+  myAddress= 0xbccf000000000000|channel;  //这个值每次都要动态的改
   my_addr_idx = (uint8_t)findIndex(myAddress);
-   
+  ANTENNA_DELAY = ( (UAV_LOC_DELAY[channel])*499.2e6*128 )/299792458.0;
   vTaskDelay(5000);
   
 
@@ -376,4 +415,5 @@ LOG_ADD(LOG_FLOAT, distance2peer60,&distances[5])
 LOG_ADD(LOG_FLOAT, distance2peer70,&distances[6])
 LOG_ADD(LOG_FLOAT, distance2peer80,&distances[7])
 LOG_ADD(LOG_FLOAT, distance2peer90,&distances[8])
+LOG_ADD(LOG_FLOAT, distance2peer90,&distances[9])
 LOG_GROUP_STOP(peerdist2)

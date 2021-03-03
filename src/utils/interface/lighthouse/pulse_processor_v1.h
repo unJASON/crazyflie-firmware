@@ -45,4 +45,8 @@
  * @return true, angle, base station and axis are written
  * @return false, no valid result
  */
-bool pulseProcessorV1ProcessPulse(pulseProcessor_t *state, const pulseProcessorFrame_t* frameData, pulseProcessorResult_t* angles, int *baseStation, int *axis);
+bool pulseProcessorV1ProcessPulse(pulseProcessor_t *state, const pulseProcessorFrame_t* frameData, pulseProcessorResult_t* angles, int *baseStation, int *axis, bool* calibDataIsDecoded);
+
+void pulseProcessorV1ProcessValidAngles(pulseProcessorResult_t* angles, int basestation);
+
+uint8_t pulseProcessorV1AnglesQuality();

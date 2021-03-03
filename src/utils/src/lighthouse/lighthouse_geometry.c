@@ -35,6 +35,7 @@
  */
 
 #include "lighthouse_geometry.h"
+#include "cf_math.h"
 
 static void vec_cross_product(const vec3d a, const vec3d b, vec3d res) {
     res[0] = a[1]*b[2] - a[2]*b[1];
@@ -101,7 +102,7 @@ static bool intersect_lines(vec3d orig1, vec3d vec1, vec3d orig2, vec3d vec2, ve
     return true;
 }
 
-bool lighthouseGeometryGetPositionFromRayIntersection(baseStationGeometry_t baseStations[2], float angles1[2], float angles2[2], vec3d position, float *position_delta)
+bool lighthouseGeometryGetPositionFromRayIntersection(const baseStationGeometry_t baseStations[2], float angles1[2], float angles2[2], vec3d position, float *position_delta)
 {
     static vec3d ray1, ray2, origin1, origin2;
 
@@ -114,14 +115,15 @@ bool lighthouseGeometryGetPositionFromRayIntersection(baseStationGeometry_t base
     return intersect_lines(origin1, ray1, origin2, ray2, position, position_delta);
 }
 
-void lighthouseGeometryGetBaseStationPosition(baseStationGeometry_t* bs, vec3d baseStationPos) {
+void lighthouseGeometryGetBaseStationPosition(const baseStationGeometry_t* bs, vec3d baseStationPos) {
     // TODO: Make geometry adjustments within base station.
     vec3d rotated_origin_delta = {};
     //vec3d base_origin_delta = {-0.025f, -0.025f, 0.f};  // Rotors are slightly off center in base station.
     // arm_matrix_instance_f32 origin_vec = {3, 1, base_origin_delta};
     // arm_matrix_instance_f32 origin_rotated_vec = {3, 1, rotated_origin_delta};
-    // arm_mat_mult_f32(&source_rotation_matrix, &origin_vec, &origin_rotated_vec);
-    arm_add_f32(bs->origin, rotated_origin_delta, baseStationPos, vec3d_size);
+    // mat_mult(&source_rotation_matrix, &origin_vec, &origin_rotated_vec);
+    baseStationGeometry_t* bs_unconst = (baseStationGeometry_t*)bs;
+    arm_add_f32(bs_unconst->origin, rotated_origin_delta, baseStationPos, vec3d_size);
 }
 
 void lighthouseGeometryGetRay(const baseStationGeometry_t* baseStationGeometry, const float angleH, const float angleV, vec3d ray) {
@@ -136,7 +138,7 @@ void lighthouseGeometryGetRay(const baseStationGeometry_t* baseStationGeometry, 
     arm_matrix_instance_f32 source_rotation_matrix = {3, 3, (float32_t *)baseStationGeometry->mat};
     arm_matrix_instance_f32 ray_vec = {3, 1, raw_ray};
     arm_matrix_instance_f32 ray_rotated_vec = {3, 1, ray};
-    arm_mat_mult_f32(&source_rotation_matrix, &ray_vec, &ray_rotated_vec);
+    mat_mult(&source_rotation_matrix, &ray_vec, &ray_rotated_vec);
 }
 
 bool lighthouseGeometryIntersectionPlaneVector(const vec3d linePoint, const vec3d lineVec, const vec3d planePoint, const vec3d PlaneNormal, vec3d intersectionPoint) {
@@ -198,31 +200,4 @@ bool lighthouseGeometryYawDelta(const vec3d ipv, const vec3d spv, const vec3d n,
 
     *yawDelta = delta;
     return true;
-}
-
-void lighthouseGeometryCalculateAnglesFromRotationMatrix(baseStationGeometry_t* baseStationGeometry, baseStationEulerAngles_t* baseStationEulerAngles) {
-
-   /*
-    * roll pitch yaw Rotation matrix
-    *
-    R = | R00 R01 R02 |
-        | R10 R11 R12 |
-        | R20 R21 R22 |
-        */
-
-  float32_t R00 = (float32_t)baseStationGeometry->mat[0][0];
-  float32_t R01 = (float32_t)baseStationGeometry->mat[0][1];
-  float32_t R02 = (float32_t)baseStationGeometry->mat[0][2];
-  float32_t R12 = (float32_t)baseStationGeometry->mat[1][2];
-  float32_t R22 = (float32_t)baseStationGeometry->mat[2][2];
-
-
-  float pitchBaseStation = asin(R02);
-  float yawBaseStation = -1.0*atan2(R01,R00);
-  float rollBaseStation = -1.0*atan2(R12,R22);
-
-  baseStationEulerAngles->roll=rollBaseStation;
-  baseStationEulerAngles->pitch=pitchBaseStation;
-  baseStationEulerAngles->yaw=yawBaseStation;
-
 }

@@ -73,6 +73,18 @@
 #include "physicalConstants.h"
 
 #include "statsCnt.h"
+#include "rateSupervisor.h"
+
+// Measurement models
+#include "mm_distance.h"
+#include "mm_absolute_height.h"
+#include "mm_position.h"
+#include "mm_pose.h"
+#include "mm_tdoa.h"
+#include "mm_flow.h"
+#include "mm_tof.h"
+#include "mm_yaw_error.h"
+#include "mm_sweep_angles.h"
 
 #define DEBUG_MODULE "ESTKALMAN"
 #include "debug.h"
@@ -178,10 +190,8 @@ static StaticSemaphore_t dataMutexBuffer;
  * Constants used in the estimator
  */
 
-#define CRAZYFLIE_WEIGHT_grams (27.0f)
-
 //thrust is thrust mapped for 65536 <==> 60 GRAMS!
-#define CONTROL_TO_ACC (GRAVITY_MAGNITUDE*60.0f/CRAZYFLIE_WEIGHT_grams/65536.0f)
+#define CONTROL_TO_ACC (GRAVITY_MAGNITUDE*60.0f/(CF_MASS*1000.0f)/65536.0f)
 
 
 /**
@@ -231,6 +241,8 @@ static bool quadIsFlying = false;
 static uint32_t lastFlightCmd;
 static uint32_t takeoffTime;
 
+static OutlierFilterLhState_t sweepOutlierFilterState;
+
 // Data used to enable the task and stabilizer loop to run with minimal locking
 static state_t taskEstimatorState; // The estimator state produced by the task, copied to the stabilzer when needed.
 static Axis3f gyroSnapshot; // A snpashot of the latest gyro data, used by the task
@@ -245,24 +257,16 @@ static STATS_CNT_RATE_DEFINE(finalizeCounter, ONE_SECOND);
 static STATS_CNT_RATE_DEFINE(measurementAppendedCounter, ONE_SECOND);
 static STATS_CNT_RATE_DEFINE(measurementNotAppendedCounter, ONE_SECOND);
 
+static rateSupervisor_t rateSupervisorContext;
+
+#define WARNING_HOLD_BACK_TIME M2T(2000)
+static uint32_t warningBlockTime = 0;
+
 #ifdef KALMAN_USE_BARO_UPDATE
 static const bool useBaroUpdate = true;
 #else
 static const bool useBaroUpdate = false;
 #endif
-
-/**
- * Supporting and utility functions
- */
-
-static inline void mat_trans(const arm_matrix_instance_f32 * pSrc, arm_matrix_instance_f32 * pDst)
-  { configASSERT(ARM_MATH_SUCCESS == arm_mat_trans_f32(pSrc, pDst)); }
-static inline void mat_inv(const arm_matrix_instance_f32 * pSrc, arm_matrix_instance_f32 * pDst)
-  { configASSERT(ARM_MATH_SUCCESS == arm_mat_inverse_f32(pSrc, pDst)); }
-static inline void mat_mult(const arm_matrix_instance_f32 * pSrcA, const arm_matrix_instance_f32 * pSrcB, arm_matrix_instance_f32 * pDst)
-  { configASSERT(ARM_MATH_SUCCESS == arm_mat_mult_f32(pSrcA, pSrcB, pDst)); }
-static inline float arm_sqrt(float32_t in)
-  { float pOut = 0; arm_status result = arm_sqrt_f32(in, &pOut); configASSERT(ARM_MATH_SUCCESS == result); return pOut; }
 
 static void kalmanTask(void* parameters);
 static bool predictStateForward(uint32_t osTick, float dt);
@@ -305,13 +309,15 @@ static void kalmanTask(void* parameters) {
   uint32_t lastPNUpdate = xTaskGetTickCount();
   uint32_t nextBaroUpdate = xTaskGetTickCount();
 
+  rateSupervisorInit(&rateSupervisorContext, xTaskGetTickCount(), M2T(1000), 99, 101, 1);
+
   while (true) {
     xSemaphoreTake(runTaskSemaphore, portMAX_DELAY);
 
     // If the client triggers an estimator reset via parameter update
     if (coreData.resetEstimation) {
       estimatorKalmanInit();
-      coreData.resetEstimation = false;
+      paramSetInt(paramGetVarId("kalman", "resetEstimation"), 0);
     }
 
     // Tracks whether an update to the state has been made, and the state therefore requires finalization
@@ -333,6 +339,10 @@ static void kalmanTask(void* parameters) {
       }
 
       nextPrediction = osTick + S2T(1.0f / PREDICT_RATE);
+
+      if (!rateSupervisorValidate(&rateSupervisorContext, T2M(osTick))) {
+        DEBUG_PRINT("WARNING: Kalman prediction rate low (%lu)\n", rateSupervisorLatestCount(&rateSupervisorContext));
+      }
     }
 
     /**
@@ -374,7 +384,10 @@ static void kalmanTask(void* parameters) {
       xSemaphoreTake(dataMutex, portMAX_DELAY);
       memcpy(&gyro, &gyroSnapshot, sizeof(gyro));
       xSemaphoreGive(dataMutex);
-      doneUpdate = doneUpdate || updateQueuedMeasurments(&gyro, osTick);
+
+      if(updateQueuedMeasurments(&gyro, osTick)) {
+        doneUpdate = true;
+      }
     }
 
     /**
@@ -390,7 +403,11 @@ static void kalmanTask(void* parameters) {
       STATS_CNT_RATE_EVENT(&finalizeCounter);
       if (! kalmanSupervisorIsStateWithinBounds(&coreData)) {
         coreData.resetEstimation = true;
-        DEBUG_PRINT("State out of bounds, resetting\n");
+
+        if (osTick > warningBlockTime) {
+          warningBlockTime = osTick + WARNING_HOLD_BACK_TIME;
+          DEBUG_PRINT("State out of bounds, resetting\n");
+        }
       }
     }
 
@@ -570,7 +587,7 @@ static bool updateQueuedMeasurments(const Axis3f *gyro, const uint32_t tick) {
   sweepAngleMeasurement_t angles;
   while (stateEstimatorHasSweepAnglesPacket(&angles))
   {
-    kalmanCoreUpdateWithSweepAngles(&coreData, &angles, tick);
+    kalmanCoreUpdateWithSweepAngles(&coreData, &angles, tick, &sweepOutlierFilterState);
     doneUpdate = true;
   }
 
@@ -597,6 +614,8 @@ void estimatorKalmanInit(void) {
   thrustAccumulatorCount = 0;
   baroAccumulatorCount = 0;
   xSemaphoreGive(dataMutex);
+
+  outlierFilterReset(&sweepOutlierFilterState, 0);
 
   kalmanCoreInit(&coreData);
 }
@@ -740,6 +759,10 @@ LOG_GROUP_START(kalman)
   STATS_CNT_RATE_LOG_ADD(rtApnd, &measurementAppendedCounter)
   STATS_CNT_RATE_LOG_ADD(rtRej, &measurementNotAppendedCounter)
 LOG_GROUP_STOP(kalman)
+
+LOG_GROUP_START(outlierf)
+  LOG_ADD(LOG_INT32, lhWin, &sweepOutlierFilterState.openingWindow)
+LOG_GROUP_STOP(outlierf)
 
 PARAM_GROUP_START(kalman)
   PARAM_ADD(PARAM_UINT8, resetEstimation, &coreData.resetEstimation)

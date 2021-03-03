@@ -42,4 +42,31 @@ typedef struct {
   int hitCount;
 } lighthouseBsIdentificationData_t;
 
+void lighthouseCoreInit();
 void lighthouseCoreTask(void *param);
+
+/**
+ * @brief Set calibration data for one base station of the system
+ *
+ * @param baseStation   The id of the base station
+ * @param calibration   Pointer to calibration data
+ */
+void lighthouseCoreSetCalibrationData(const uint8_t baseStation, const lighthouseCalibration_t* calibration);
+
+typedef enum {
+  lh_led_off = 0,
+  lh_led_slow_blink = 1,
+  lh_led_fast_blink = 2,
+  lh_led_on = 3,
+} lighthouseCoreLedState_t;
+
+/**
+ * @brief Set LEDs on the lighthouse deck
+ *
+ * @param red  State of the red LED
+ * @param orange State of the orange LED
+ * @param green State of the green LED
+ */
+void lighthouseCoreSetLeds(lighthouseCoreLedState_t red, lighthouseCoreLedState_t orange, lighthouseCoreLedState_t green);
+
+void lighthouseCoreLedTimer();

@@ -31,10 +31,7 @@
 #include <string.h>
 #include <math.h>
 #include "test_support.h"
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+#include "physicalConstants.h"
 
 // Decoding contants
 // Times are expressed in a 24MHz clock
@@ -57,6 +54,7 @@
 #define FRAME_WIDTH_MIN 395000
 #define FRAME_WIDTH_MAX 405000
 
+static uint16_t validAngles = 0;
 
 TESTABLE_STATIC int findSyncTime(const pulseProcessorPulse_t pulseHistory[], uint32_t *sync0Time);
 TESTABLE_STATIC bool getSystemSyncTime(const uint32_t syncTimes[], size_t nSyncTimes, uint32_t *syncTime);
@@ -147,11 +145,11 @@ TESTABLE_STATIC int getBaseStationId(pulseProcessorV1_t *stateV1, unsigned int t
   return baseStation;
 }
 
-static SweepDirection getAxis(int width) {
-  SweepDirection result = sweepDirection_x;
+static SweepId_t getAxis(int width) {
+  SweepId_t result = sweepIdFirst;
 
   if ((((width-SYNC_BASE_WIDTH)/SYNC_DIVIDER)&0x01) != 0) {
-    result = sweepDirection_y;
+    result = sweepIdSecond;
   }
 
   return result;
@@ -228,7 +226,7 @@ static void storeSyncData(pulseProcessorV1_t *stateV1, int baseStation, unsigned
   if (0 == baseStation) {
     stateV1->currentSync0 = timestamp;
     stateV1->currentSync0Width = width;
-    if (getAxis(width) == sweepDirection_x) {
+    if (getAxis(width) == sweepIdFirst) {
       uint32_t prevSync0X = stateV1->currentSync0X;
       stateV1->currentSync0X = timestamp;
       stateV1->frameWidth[0][0] = TS_DIFF(stateV1->currentSync0X, prevSync0X);
@@ -239,7 +237,7 @@ static void storeSyncData(pulseProcessorV1_t *stateV1, int baseStation, unsigned
     }
   } else {
     stateV1->currentSync1Width = width;
-    if (getAxis(width) == sweepDirection_x) {
+    if (getAxis(width) == sweepIdFirst) {
       uint32_t prevSync1X = stateV1->currentSync1X;
       stateV1->currentSync1X = timestamp;
       stateV1->frameWidth[1][0] = TS_DIFF(stateV1->currentSync1X, prevSync1X);
@@ -276,27 +274,20 @@ TESTABLE_STATIC bool isNewSync(uint32_t timestamp, uint32_t lastSync) {
 #define DEBUG_PRINT printf
 #endif
 
-static void printBSInfo(struct ootxDataFrame_s *frame)
-{
-  DEBUG_PRINT("Got calibration from %08X\n", (unsigned int)frame->id);
-  DEBUG_PRINT("  phase0: %f\n", (double)frame->phase0);
-  DEBUG_PRINT("  phase1: %f\n", (double)frame->phase1);
+static bool decodeAndApplyBaseStationCalibrationData(pulseProcessor_t *state) {
+  bool isDecoded = false;
+
+  if (ootxDecoderProcessBit(&state->ootxDecoder[0], getOotxDataBit(state->v1.currentSync0Width))) {
+    isDecoded = true;
+  }
+  if (ootxDecoderProcessBit(&state->ootxDecoder[1], getOotxDataBit(state->v1.currentSync1Width))) {
+    isDecoded = true;
+  }
+
+  return isDecoded;
 }
 
-static void decodeAndApplyBaseStationCalibrationData(pulseProcessor_t *state) {
-  if (!state->bsCalibration[0].valid &&
-      ootxDecoderProcessBit(&state->ootxDecoder[0], getOotxDataBit(state->v1.currentSync0Width))) {
-    printBSInfo(&state->ootxDecoder[0].frame);
-    lighthouseCalibrationInitFromFrame(&state->bsCalibration[0], &state->ootxDecoder[0].frame);
-  }
-  if (!state->bsCalibration[1].valid &&
-      ootxDecoderProcessBit(&state->ootxDecoder[1], getOotxDataBit(state->v1.currentSync1Width))) {
-    printBSInfo(&state->ootxDecoder[1].frame);
-    lighthouseCalibrationInitFromFrame(&state->bsCalibration[1], &state->ootxDecoder[1].frame);
-  }
-}
-
-static bool processSync(pulseProcessor_t *state, unsigned int timestamp, unsigned int width, pulseProcessorResult_t* angles, int *baseStation, int *axis) {
+static bool processSync(pulseProcessor_t *state, unsigned int timestamp, unsigned int width, pulseProcessorResult_t* angles, int *baseStation, int *axis, bool* calibDataIsDecoded) {
   bool anglesMeasured = false;
   pulseProcessorV1_t* stateV1 = &state->v1;
 
@@ -305,7 +296,7 @@ static bool processSync(pulseProcessor_t *state, unsigned int timestamp, unsigne
       anglesMeasured = processPreviousFrame(stateV1, angles, baseStation, axis);
 
       if (anglesMeasured) {
-        decodeAndApplyBaseStationCalibrationData(state);
+        *calibDataIsDecoded = decodeAndApplyBaseStationCalibrationData(state);
       }
 
       int baseStation = getBaseStationId(stateV1, timestamp);
@@ -324,27 +315,30 @@ static bool processSync(pulseProcessor_t *state, unsigned int timestamp, unsigne
   return anglesMeasured;
 }
 
-static bool processWhenSynchronized(pulseProcessor_t *state, int sensor, unsigned int timestamp, unsigned int width, pulseProcessorResult_t* angles, int *baseStation, int *axis) {
+static bool processWhenSynchronized(pulseProcessor_t *state, int sensor, unsigned int timestamp, unsigned int width, pulseProcessorResult_t* angles, int *baseStation, int *axis, bool* calibDataIsDecoded) {
   bool anglesMeasured = false;
 
   if (isSweep(&state->v1, timestamp, width)) {
     storeSweepData(&state->v1, sensor, timestamp);
   } else {
-    anglesMeasured = processSync(state, timestamp, width, angles, baseStation, axis);
+    anglesMeasured = processSync(state, timestamp, width, angles, baseStation, axis, calibDataIsDecoded);
   }
 
   return anglesMeasured;
 }
 
-
-bool pulseProcessorV1ProcessPulse(pulseProcessor_t *state, const pulseProcessorFrame_t* frameData, pulseProcessorResult_t* angles, int *baseStation, int *axis)
+bool pulseProcessorV1ProcessPulse(pulseProcessor_t *state, const pulseProcessorFrame_t* frameData, pulseProcessorResult_t* angles, int *baseStation, int *axis, bool* calibDataIsDecoded)
 {
   bool anglesMeasured = false;
 
   if (!state->v1.synchronized) {
     synchronize(&state->v1, frameData->sensor, frameData->timestamp, frameData->width);
+
+    if(!state->v1.synchronized) {
+      pulseProcessorAllClear(angles);
+    }
   } else {
-    anglesMeasured = processWhenSynchronized(state, frameData->sensor, frameData->timestamp, frameData->width, angles, baseStation, axis);
+    anglesMeasured = processWhenSynchronized(state, frameData->sensor, frameData->timestamp, frameData->width, angles, baseStation, axis, calibDataIsDecoded);
     angles->measurementType = lighthouseBsTypeV1;
   }
 
@@ -495,4 +489,19 @@ TESTABLE_STATIC bool getSystemSyncTime(const uint32_t syncTimes[], size_t nSyncT
 
 
   return true;
+}
+
+uint32_t anglesMask = (1 << (PULSE_PROCESSOR_N_SWEEPS * PULSE_PROCESSOR_N_SENSORS)) - 1;
+void pulseProcessorV1ProcessValidAngles(pulseProcessorResult_t* angles, int basestation) {
+  validAngles &= ~(anglesMask << (basestation*PULSE_PROCESSOR_N_SWEEPS*PULSE_PROCESSOR_N_SENSORS));
+  for(int sensor=0; sensor!=PULSE_PROCESSOR_N_SENSORS; sensor++) {
+    if(angles->sensorMeasurementsLh1[sensor].baseStatonMeasurements[basestation].validCount != 0) {
+      uint32_t sensorBits = (1 << angles->sensorMeasurementsLh1[sensor].baseStatonMeasurements[basestation].validCount) - 1;
+      validAngles |= sensorBits << (sensor*PULSE_PROCESSOR_N_SWEEPS + basestation*PULSE_PROCESSOR_N_SWEEPS*PULSE_PROCESSOR_N_SENSORS);
+    }
+  }
+}
+
+uint8_t pulseProcessorV1AnglesQuality() {
+  return __builtin_popcount(validAngles)*1.0/(PULSE_PROCESSOR_N_SWEEPS*PULSE_PROCESSOR_N_SENSORS*PULSE_PROCESSOR_N_BASE_STATIONS)*255;
 }

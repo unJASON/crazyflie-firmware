@@ -43,6 +43,7 @@
 #include "config.h"
 #include "system.h"
 #include "platform.h"
+#include "storage.h"
 #include "configblock.h"
 #include "worker.h"
 #include "freeRTOSdebug.h"
@@ -67,10 +68,19 @@
 #include "app.h"
 #include "static_mem.h"
 #include "peer_localization.h"
+#include "cfassert.h"
+
+#ifndef START_DISARMED
+#define ARM_INIT true
+#else
+#define ARM_INIT false
+#endif
 
 /* Private variable */
 static bool selftestPassed;
 static bool canFly;
+static bool armed = ARM_INIT;
+static bool forceArm;
 static bool isInit;
 
 STATIC_MEM_TASK_ALLOC(systemTask, SYSTEM_TASK_STACKSIZE);
@@ -119,6 +129,7 @@ void systemInit(void)
               *((int*)(MCU_ID_ADDRESS+0)), *((short*)(MCU_FLASH_SIZE_ADDRESS)));
 
   configblockInit();
+  storageInit();
   workerInit();
   adcInit();
   ledseqInit();
@@ -188,6 +199,7 @@ void systemTask(void *arg)
   //Test the modules
   pass &= systemTest();
   pass &= configblockTest();
+  pass &= storageTest();
   pass &= commTest();
   pass &= commanderTest();
   pass &= stabilizerTest();
@@ -196,6 +208,7 @@ void systemTask(void *arg)
   pass &= soundTest();
   pass &= memTest();
   pass &= watchdogNormalStartTest();
+  pass &= cfAssertNormalStartTest();
   pass &= peerLocalizationTest();
 
   //Start the firmware
@@ -204,8 +217,8 @@ void systemTask(void *arg)
     selftestPassed = 1;
     systemStart();
     soundSetEffect(SND_STARTUP);
-    ledseqRun(SYS_LED, seq_alive);
-    ledseqRun(LINK_LED, seq_testPassed);
+    ledseqRun(&seq_alive);
+    ledseqRun(&seq_testPassed);
   }
   else
   {
@@ -214,7 +227,7 @@ void systemTask(void *arg)
     {
       while(1)
       {
-        ledseqRun(SYS_LED, seq_testPassed); //Red passed == not passed!
+        ledseqRun(&seq_testFailed);
         vTaskDelay(M2T(2000));
         // System can be forced to start by setting the param to 1 from the cfclient
         if (selftestPassed)
@@ -271,6 +284,17 @@ bool systemCanFly(void)
   return canFly;
 }
 
+void systemSetArmed(bool val)
+{
+  armed = val;
+}
+
+bool systemIsArmed()
+{
+
+  return armed || forceArm;
+}
+
 void vApplicationIdleHook( void )
 {
   static uint32_t tickOfLatestWatchdogReset = M2T(0);
@@ -299,10 +323,12 @@ PARAM_ADD(PARAM_UINT32 | PARAM_RONLY, id2, MCU_ID_ADDRESS+8)
 PARAM_GROUP_STOP(cpu)
 
 PARAM_GROUP_START(system)
-PARAM_ADD(PARAM_INT8, selftestPassed, &selftestPassed)
+PARAM_ADD(PARAM_INT8 | PARAM_RONLY, selftestPassed, &selftestPassed)
+PARAM_ADD(PARAM_INT8, forceArm, &forceArm)
 PARAM_GROUP_STOP(sytem)
 
 /* Loggable variables */
 LOG_GROUP_START(sys)
 LOG_ADD(LOG_INT8, canfly, &canFly)
+LOG_ADD(LOG_INT8, armed, &armed)
 LOG_GROUP_STOP(sys)

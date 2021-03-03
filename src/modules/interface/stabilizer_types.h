@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "imu_types.h"
+#include "lighthouse_calibration.h"
 
 /* Data structure used by the stabilizer subsystem.
  * All have a timestamp to be set when the data is calculated.
@@ -247,13 +248,15 @@ typedef struct {
 /** Sweep angle measurement */
 typedef struct {
   uint32_t timestamp;
-  vec3d* sensorPos;          // Sensor position in the CF reference frame
-  vec3d* rotorPos;           // Pos of rotor origin in global reference frame
-  mat3d* rotorRot;           // Rotor rotation matrix
-  mat3d* rotorRotInv;        // Inverted rotor rotation matrix
-  float tan_t;               // t is the tilt angle of the light plane on the rotor
+  const vec3d* sensorPos;    // Sensor position in the CF reference frame
+  const vec3d* rotorPos;     // Pos of rotor origin in global reference frame
+  const mat3d* rotorRot;     // Rotor rotation matrix
+  const mat3d* rotorRotInv;  // Inverted rotor rotation matrix
+  float t;                   // t is the tilt angle of the light plane on the rotor
   float measuredSweepAngle;
   float stdDev;
+  const lighthouseCalibrationSweep_t* calib;
+  lighthouseCalibrationMeasurementModel_t calibrationMeasurementModel;
 } sweepAngleMeasurement_t;
 
 // Frequencies to bo used with the RATE_DO_EXECUTE_HZ macro. Do NOT use an arbitrary number.

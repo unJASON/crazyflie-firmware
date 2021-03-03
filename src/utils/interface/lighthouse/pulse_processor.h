@@ -34,6 +34,7 @@
 
 #include "ootx_decoder.h"
 #include "lighthouse_calibration.h"
+#include "lighthouse_geometry.h"
 
 #define PULSE_PROCESSOR_N_SWEEPS 2
 #define PULSE_PROCESSOR_N_BASE_STATIONS 2
@@ -107,9 +108,9 @@ typedef struct {
 } pulseProcessorPulse_t;
 
 typedef enum {
-  sweepDirection_x = 0,
-  sweepDirection_y = 1
-} SweepDirection;
+  sweepIdFirst = 0,  // The X sweep in LH 1
+  sweepIdSecond = 1  // The Y sweep in LH 1
+} SweepId_t;
 
 typedef enum {
   sweepStorageStateWaiting = 0,
@@ -150,7 +151,7 @@ typedef struct {
 
   // Base station and axis of the current frame
   int currentBaseStation;
-  SweepDirection currentAxis;
+  SweepId_t currentAxis;
 
   // Sweep timestamps
   struct {
@@ -206,6 +207,8 @@ typedef struct {
 } pulseProcessorV2_t;
 
 typedef struct pulseProcessor_s {
+  bool receivedBsSweep[PULSE_PROCESSOR_N_BASE_STATIONS];
+
   union {
     struct {
       pulseProcessorV1_t v1;
@@ -218,6 +221,8 @@ typedef struct pulseProcessor_s {
 
   ootxDecoderState_t ootxDecoder[PULSE_PROCESSOR_N_BASE_STATIONS];
   lighthouseCalibration_t bsCalibration[PULSE_PROCESSOR_N_BASE_STATIONS];
+  baseStationGeometry_t bsGeometry[PULSE_PROCESSOR_N_BASE_STATIONS];
+  baseStationGeometryCache_t bsGeoCache[PULSE_PROCESSOR_N_BASE_STATIONS];
 
   // Health check data
   uint32_t healthFirstSensorTs;
@@ -244,14 +249,16 @@ typedef struct {
 /**
  * @brief Interface for processing of pulse data from the lighthouse
  *
- * @param state
- * @param frameData
- * @param baseStation
- * @param axis
+ * @param state               The current pulse processing state
+ * @param frameData           The frame of pulse data to process
+ * @param angles              The resulting angle information that was extracted from the frameData. Valid if this function returns true.
+ * @param baseStation         The channel (base station) that the frame originates from. Valid if this function returns true.
+ * @param axis                The axis (first of second sweep) represented by the frame. Valid if this function returns true.
+ * @param calibDataIsDecoded  True if there is one or more blocks of calibration data that have been decoded.
  * @return true, angle, base station and axis are written
  * @return false, no valid result
  */
-typedef bool (*pulseProcessorProcessPulse_t)(pulseProcessor_t *state, const pulseProcessorFrame_t* frameData, pulseProcessorResult_t* angles, int *baseStation, int *axis);
+typedef bool (*pulseProcessorProcessPulse_t)(pulseProcessor_t *state, const pulseProcessorFrame_t* frameData, pulseProcessorResult_t* angles, int *baseStation, int *axis, bool* calibDataIsDecoded);
 
 /**
  * @brief Apply calibration correction to all angles of all sensors for a particular baseStation
@@ -259,13 +266,39 @@ typedef bool (*pulseProcessorProcessPulse_t)(pulseProcessor_t *state, const puls
  * @param state
  * @param angles
  * @param baseStation
+ *
+ * @return true, calibration data has been applied
+ * @return false, calibration data is missing
  */
-void pulseProcessorApplyCalibration(pulseProcessor_t *state, pulseProcessorResult_t* angles, int baseStation);
+bool pulseProcessorApplyCalibration(pulseProcessor_t *state, pulseProcessorResult_t* angles, int baseStation);
+
+void pulseProcessorClearOutdated(pulseProcessor_t *appState, pulseProcessorResult_t* angles, int basestation);
 
 /**
- * @brief Clear result struct
+ * @brief Clear the result struct for one base station when the data is processed and converted to measurements
  *
- * @param angles
- * @param baseStation
+ * @param angles The result struct to clear
+ * @param baseStation The base station
+ */
+void pulseProcessorProcessed(pulseProcessorResult_t* angles, int baseStation);
+
+/**
+ * @brief Clear the result struct for one base station when the sensor data invalidated
+ *
+ * @param angles The result struct to clear
+ * @param baseStation The base station
  */
 void pulseProcessorClear(pulseProcessorResult_t* angles, int baseStation);
+
+/**
+ * @brief Clear result struct when the sensor data is invalidated
+ *
+ * @param angles
+ */
+void pulseProcessorAllClear(pulseProcessorResult_t* angles);
+
+/**
+ * Get quality of angles reception of the basestations.
+ * 0 means no angles, 255 means reception of all angles of all axis of all basestations.
+ */
+uint8_t pulseProcessorAnglesQuality();

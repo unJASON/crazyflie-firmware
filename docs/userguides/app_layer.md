@@ -24,4 +24,20 @@ The folowing Makefile variables can be used for configuration:
 
 ## Internal log and param system
 
-For the app-layer, it would be good to have access to log and/or parameter values and to set parameter values. This way, your app will be able to read out sensor data or to switch controller/estimator on air. To check out these functions, look at src/modules/interface/log.h or .../param.h for the internal access functions.
+For the app-layer, it would be good to have access to log and/or parameter values and to set parameter values. This way, your app will be able to read out sensor data or to switch controller/estimator on air. To check out these functions, look at src/modules/interface/log.h or .../param.h for the internal access functions. There is also an example to be found in /examples/app_internal_param_log/.
+
+## LED sequences
+
+It is possible to run LED sequences from the app layer to control the four LEDs on the Crazyflie and provide runtime information to the user. See the src/hal/interface/ledseq.h file for more information.
+
+## App channel: packet based communication between the Crazyflie and the Python lib
+
+The Appchannel API allows to communicate using radio packets with an app.
+The packets can contain anything of a size up to 31 bytes, the protocol is defined by the app.
+
+For more information about the API see the header file src/modules/interface/app_channel.h.
+An example of how to use the app channel is in examples/app_appchannel_test/
+
+## Examples
+
+In the [example folder](https://github.com/bitcraze/crazyflie-firmware/tree/master/examples) of the crazyflie-firmware repository, there are several examples shown tha tuse the app layer, including a simple hello world example.

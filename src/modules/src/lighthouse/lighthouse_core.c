@@ -41,6 +41,7 @@
 #define DEBUG_MODULE "LH"
 #include "debug.h"
 #include "uart1.h"
+#include "crtp_localization_service.h"
 
 #include "pulse_processor.h"
 #include "pulse_processor_v1.h"
@@ -49,6 +50,8 @@
 #include "lighthouse_deck_flasher.h"
 #include "lighthouse_position_est.h"
 #include "lighthouse_core.h"
+
+#include "lighthouse_storage.h"
 
 #include "test_support.h"
 #include "static_mem.h"
@@ -60,10 +63,18 @@ static lighthouseUartFrame_t frame;
 static lighthouseBsIdentificationData_t bsIdentificationData;
 
 // Stats
+
+typedef enum uwbEvent_e {
+  statusNotReceiving = 0,
+  statusMissingData = 1,
+  statusToEstimator = 2,
+} lhSystemStatus_t;
+
 static bool uartSynchronized = false;
 
 #define ONE_SECOND 1000
 #define HALF_SECOND 500
+#define FIFTH_SECOND 200
 static STATS_CNT_RATE_DEFINE(serialFrameRate, ONE_SECOND);
 static STATS_CNT_RATE_DEFINE(frameRate, ONE_SECOND);
 static STATS_CNT_RATE_DEFINE(cycleRate, ONE_SECOND);
@@ -72,14 +83,95 @@ static STATS_CNT_RATE_DEFINE(bs0Rate, HALF_SECOND);
 static STATS_CNT_RATE_DEFINE(bs1Rate, HALF_SECOND);
 static statsCntRateLogger_t* bsRates[PULSE_PROCESSOR_N_BASE_STATIONS] = {&bs0Rate, &bs1Rate};
 
-static uint16_t pulseWidth[PULSE_PROCESSOR_N_SENSORS];
-NO_DMA_CCM_SAFE_ZERO_INIT static pulseProcessor_t ppState = {};
 
+// A bitmap that indicates which base staions that are received
+static uint16_t baseStationReceivedMapWs;
+static uint16_t baseStationReceivedMap;
+
+// A bitmap that indicates which base staions that are actively used in the estimation process, that is receiving sweeps
+// as well a has valid geo and calib data
+static uint16_t baseStationActiveMapWs;
+static uint16_t baseStationActiveMap;
+
+// A bitmap that indicates which base stations that have received calibration data over the air
+static uint16_t baseStationCalibConfirmedMap;
+
+// A bitmap that indicates which base stations that have received calibration data that was different to what was stored in memory
+static uint16_t baseStationCalibUpdatedMap;
+
+static uint8_t calibStatusReset;
+
+// An overall system status indicating if data is sent to the estimator
+static lhSystemStatus_t systemStatus;
+static lhSystemStatus_t systemStatusWs;
+static lhSystemStatus_t ledInternalStatus = statusToEstimator;
+
+static const uint32_t SYSTEM_STATUS_UPDATE_INTERVAL = FIFTH_SECOND;
+static uint32_t nextUpdateTimeOfSystemStatus = 0;
+
+static uint16_t pulseWidth[PULSE_PROCESSOR_N_SENSORS];
+pulseProcessor_t lighthouseCoreState;
+
+#if LIGHTHOUSE_FORCE_TYPE == 1
+pulseProcessorProcessPulse_t pulseProcessorProcessPulse = pulseProcessorV1ProcessPulse;
+#elif LIGHTHOUSE_FORCE_TYPE == 2
+pulseProcessorProcessPulse_t pulseProcessorProcessPulse = pulseProcessorV2ProcessPulse;
+#else
 pulseProcessorProcessPulse_t pulseProcessorProcessPulse = (void*)0;
+#endif
 
 #define UART_FRAME_LENGTH 12
 
-static bool getUartFrameRaw(lighthouseUartFrame_t *frame) {
+
+static bool deckIsFlashed = false;
+
+static void modifyBit(uint16_t *bitmap, const int index, const bool value) {
+  const uint16_t mask = (1 << index);
+
+  if (value) {
+    *bitmap |= mask;
+  } else {
+    *bitmap &= ~mask;
+  }
+}
+
+void lighthouseCoreInit() {
+  lighthousePositionEstInit();
+}
+
+void lighthouseCoreLedTimer()
+{
+  if (deckIsFlashed){
+    switch (systemStatus)
+    {
+      case statusNotReceiving:
+        if(ledInternalStatus != systemStatus)
+        {
+          lighthouseCoreSetLeds(lh_led_off, lh_led_on, lh_led_off);
+          ledInternalStatus = systemStatus;
+        }
+        break;
+      case statusMissingData:
+        if(ledInternalStatus != systemStatus)
+        {
+          lighthouseCoreSetLeds(lh_led_off, lh_led_slow_blink, lh_led_off);
+          ledInternalStatus = systemStatus;
+        }
+        break;
+      case statusToEstimator:
+        if(ledInternalStatus != systemStatus)
+        {
+          lighthouseCoreSetLeds(lh_led_off, lh_led_off, lh_led_on);
+          ledInternalStatus = systemStatus;
+        }
+        break;
+      default:
+        ASSERT(false);
+    }
+  }
+}
+
+TESTABLE_STATIC bool getUartFrameRaw(lighthouseUartFrame_t *frame) {
   static char data[UART_FRAME_LENGTH];
   int syncCounter = 0;
 
@@ -114,17 +206,6 @@ static bool getUartFrameRaw(lighthouseUartFrame_t *frame) {
   return isFrameValid;
 }
 
-TESTABLE_STATIC bool getUartFrame(lighthouseUartFrame_t *frame) {
-  do {
-    bool isUartFrameValid = getUartFrameRaw(frame);
-    if (! isUartFrameValid) {
-      return false;
-    }
-  } while(frame->isSyncFrame);
-
-  return true;
-}
-
 TESTABLE_STATIC void waitForUartSynchFrame() {
   char c;
   int syncCounter = 0;
@@ -141,6 +222,16 @@ TESTABLE_STATIC void waitForUartSynchFrame() {
   }
 }
 
+void lighthouseCoreSetLeds(lighthouseCoreLedState_t red, lighthouseCoreLedState_t orange, lighthouseCoreLedState_t green)
+{
+  uint8_t commandBuffer[2];
+
+  commandBuffer[0] = 0x01;
+  commandBuffer[1] = (green<<4) | (orange<<2) | red;
+
+  uart1SendData(2, commandBuffer);
+}
+
 
 // Method used to estimate position
 // 0 = Position calculated outside the estimator using intersection point of beams.
@@ -151,23 +242,28 @@ TESTABLE_STATIC void waitForUartSynchFrame() {
 static uint8_t estimationMethod = 1;
 
 
-static void usePulseResultCrossingBeams(pulseProcessor_t *appState, pulseProcessorResult_t* angles, int basestation, int axis) {
+static void usePulseResultCrossingBeams(pulseProcessor_t *appState, pulseProcessorResult_t* angles, int basestation) {
+  pulseProcessorClearOutdated(appState, angles, basestation);
+
   if (basestation == 1) {
     STATS_CNT_RATE_EVENT(&cycleRate);
 
-    lighthousePositionEstimatePoseCrossingBeams(angles, 1);
+    lighthousePositionEstimatePoseCrossingBeams(appState, angles, 1);
 
-    pulseProcessorClear(angles, 0);
-    pulseProcessorClear(angles, 1);
+    pulseProcessorProcessed(angles, 0);
+    pulseProcessorProcessed(angles, 1);
   }
 }
 
-static void usePulseResultSweeps(pulseProcessor_t *appState, pulseProcessorResult_t* angles, int basestation, int axis) {
+
+static void usePulseResultSweeps(pulseProcessor_t *appState, pulseProcessorResult_t* angles, int basestation) {
   STATS_CNT_RATE_EVENT(&cycleRate);
 
-  lighthousePositionEstimatePoseSweeps(angles, basestation);
+  pulseProcessorClearOutdated(appState, angles, basestation);
 
-  pulseProcessorClear(angles, basestation);
+  lighthousePositionEstimatePoseSweeps(appState, angles, basestation);
+
+  pulseProcessorProcessed(angles, basestation);
 }
 
 static void convertV2AnglesToV1Angles(pulseProcessorResult_t* angles) {
@@ -177,7 +273,7 @@ static void convertV2AnglesToV1Angles(pulseProcessorResult_t* angles) {
       pulseProcessorBaseStationMeasuremnt_t* to = &angles->sensorMeasurementsLh1[sensor].baseStatonMeasurements[bs];
 
       if (2 == from->validCount) {
-        pulseProcessorV2ConvertToV1Angles(from->angles[0], from->angles[1], to->angles);
+        pulseProcessorV2ConvertToV1Angles(from->correctedAngles[0], from->correctedAngles[1], to->correctedAngles);
         to->validCount = from->validCount;
       } else {
         to->validCount = 0;
@@ -186,23 +282,42 @@ static void convertV2AnglesToV1Angles(pulseProcessorResult_t* angles) {
   }
 }
 
-static void usePulseResult(pulseProcessor_t *appState, pulseProcessorResult_t* angles, int basestation, int axis) {
-  if (axis == sweepDirection_y) {
-    if (lighthouseBsTypeV2 == angles->measurementType) {
-      // Emulate V1 base stations for now, convert to V1 angles
-      convertV2AnglesToV1Angles(angles);
-    }
-    pulseProcessorApplyCalibration(appState, angles, basestation);
+static void usePulseResult(pulseProcessor_t *appState, pulseProcessorResult_t* angles, int basestation, int sweepId) {
+  const uint16_t basestationBitMap = (1 << basestation);
+  baseStationReceivedMapWs |= basestationBitMap;
 
-    switch(estimationMethod) {
-      case 0:
-        usePulseResultCrossingBeams(appState, angles, basestation, axis);
-        break;
-      case 1:
-        usePulseResultSweeps(appState, angles, basestation, axis);
-        break;
-      default:
-        break;
+  if (sweepId == sweepIdSecond) {
+    const bool hasCalibrationData = pulseProcessorApplyCalibration(appState, angles, basestation);
+    if (hasCalibrationData) {
+      if (lighthouseBsTypeV2 == angles->measurementType) {
+        // Emulate V1 base stations for now, convert to V1 angles
+        convertV2AnglesToV1Angles(angles);
+      }
+
+      // Send measurement to the ground
+      locSrvSendLighthouseAngle(basestation, angles);
+
+      const bool hasGeoData = appState->bsGeometry[basestation].valid;
+      if (hasGeoData) {
+        baseStationActiveMapWs |= basestationBitMap;
+
+        switch(estimationMethod) {
+          case 0:
+            usePulseResultCrossingBeams(appState, angles, basestation);
+            break;
+          case 1:
+            usePulseResultSweeps(appState, angles, basestation);
+            break;
+          default:
+            break;
+        }
+      }
+    }
+
+    if (baseStationActiveMapWs != 0) {
+      systemStatusWs = statusToEstimator;
+    } else {
+      systemStatusWs = statusMissingData;
     }
   }
 }
@@ -236,6 +351,28 @@ TESTABLE_STATIC lighthouseBaseStationType_t identifyBaseStationType(const lighth
     return lighthouseBsTypeUnknown;
 }
 
+static void useCalibrationData(pulseProcessor_t *appState) {
+  for (int baseStation = 0; baseStation < PULSE_PROCESSOR_N_BASE_STATIONS; baseStation++) {
+    if (appState->ootxDecoder[baseStation].isFullyDecoded) {
+      lighthouseCalibration_t newData;
+      lighthouseCalibrationInitFromFrame(&newData, &appState->ootxDecoder[baseStation].frame);
+
+      modifyBit(&baseStationCalibConfirmedMap, baseStation, true);
+
+      lighthouseCalibration_t* currentCalibData = &appState->bsCalibration[baseStation];
+      const bool currentCalibDataValid = currentCalibData->valid;
+      const bool isDataDifferent = ((newData.uid != currentCalibData->uid) || (newData.valid != currentCalibDataValid));
+      if (isDataDifferent) {
+        DEBUG_PRINT("Got calibration from %08X on channel %d\n", (unsigned int)appState->ootxDecoder[baseStation].frame.id, baseStation + 1);
+        lighthouseCoreSetCalibrationData(baseStation, &newData);
+        lighthouseStoragePersistCalibDataBackground(baseStation);
+
+        modifyBit(&baseStationCalibUpdatedMap, baseStation, currentCalibDataValid);
+      }
+    }
+  }
+}
+
 static pulseProcessorProcessPulse_t identifySystem(const lighthouseUartFrame_t* frame, lighthouseBsIdentificationData_t* bsIdentificationData) {
   pulseProcessorProcessPulse_t result = (void*)0;
 
@@ -258,21 +395,25 @@ static pulseProcessorProcessPulse_t identifySystem(const lighthouseUartFrame_t* 
 
 static void processFrame(pulseProcessor_t *appState, pulseProcessorResult_t* angles, const lighthouseUartFrame_t* frame) {
     int basestation;
-    int axis;
+    int sweepId;
+    bool calibDataIsDecoded = false;
 
     pulseWidth[frame->data.sensor] = frame->data.width;
 
-    if (pulseProcessorProcessPulse(&ppState, &frame->data, angles, &basestation, &axis)) {
+    if (pulseProcessorProcessPulse(appState, &frame->data, angles, &basestation, &sweepId, &calibDataIsDecoded)) {
         STATS_CNT_RATE_EVENT(bsRates[basestation]);
-        usePulseResult(appState, angles, basestation, axis);
+        usePulseResult(appState, angles, basestation, sweepId);
+    }
+
+    if (calibDataIsDecoded) {
+      useCalibrationData(appState);
     }
 }
 
-static void deckHealthCheck(pulseProcessor_t *appState, const lighthouseUartFrame_t* frame) {
+static void deckHealthCheck(pulseProcessor_t *appState, const lighthouseUartFrame_t* frame, const uint32_t now_ms) {
   if (!appState->healthDetermined) {
-    const uint32_t now = xTaskGetTickCount();
     if (0 == appState->healthFirstSensorTs) {
-      appState->healthFirstSensorTs = now;
+      appState->healthFirstSensorTs = now_ms;
     }
 
     if (0x0f == appState->healthSensorBitField) {
@@ -281,7 +422,7 @@ static void deckHealthCheck(pulseProcessor_t *appState, const lighthouseUartFram
     } else {
       appState->healthSensorBitField |= (0x01 << frame->data.sensor);
 
-      if ((now - appState->healthFirstSensorTs) > MAX_WAIT_TIME_FOR_HEALTH_MS) {
+      if ((now_ms - appState->healthFirstSensorTs) > MAX_WAIT_TIME_FOR_HEALTH_MS) {
         appState->healthDetermined = true;
         DEBUG_PRINT("Warning: not getting data from all sensors\n");
         for (int i = 0; i < PULSE_PROCESSOR_N_SENSORS; i++) {
@@ -296,14 +437,41 @@ static void deckHealthCheck(pulseProcessor_t *appState, const lighthouseUartFram
   }
 }
 
+static void updateSystemStatus(const uint32_t now_ms) {
+  if (now_ms > nextUpdateTimeOfSystemStatus) {
+    baseStationReceivedMap = baseStationReceivedMapWs;
+    baseStationReceivedMapWs = 0;
+
+    baseStationActiveMap = baseStationActiveMapWs;
+    baseStationActiveMapWs = 0;
+
+    systemStatus = systemStatusWs;
+    systemStatusWs = statusNotReceiving;
+
+    if (calibStatusReset) {
+      calibStatusReset = 0;
+      baseStationCalibUpdatedMap = 0;
+    }
+
+    nextUpdateTimeOfSystemStatus = now_ms + SYSTEM_STATUS_UPDATE_INTERVAL;
+  }
+}
+
 void lighthouseCoreTask(void *param) {
   bool isUartFrameValid = false;
 
   uart1Init(230400);
-  lightHousePositionGeometryDataUpdated();
   systemWaitStart();
 
+  lighthouseStorageVerifySetStorageVersion();
+  lighthouseStorageInitializeGeoDataFromStorage();
+  lighthouseStorageInitializeCalibDataFromStorage();
+
   lighthouseDeckFlasherCheckVersionAndBoot();
+  deckIsFlashed = true;
+
+
+  vTaskDelay(M2T(100));
 
   memset(&bsIdentificationData, 0, sizeof(bsIdentificationData));
 
@@ -312,25 +480,51 @@ void lighthouseCoreTask(void *param) {
     waitForUartSynchFrame();
     uartSynchronized = true;
 
-    isUartFrameValid = getUartFrame(&frame);
-    while(isUartFrameValid) {
-      STATS_CNT_RATE_EVENT(&frameRate);
+    bool previousWasSyncFrame = false;
 
-      deckHealthCheck(&ppState, &frame);
-      if (pulseProcessorProcessPulse) {
-        processFrame(&ppState, &angles, &frame);
-      } else {
-        pulseProcessorProcessPulse = identifySystem(&frame, &bsIdentificationData);
+    while((isUartFrameValid = getUartFrameRaw(&frame))) {
+      const uint32_t now_ms = T2M(xTaskGetTickCount());
+
+      // If a sync frame is getting through, we are only receiving sync frames. So nothing else. Reset state
+      if(frame.isSyncFrame && previousWasSyncFrame) {
+          pulseProcessorAllClear(&angles);
+      }
+      // Now we are receiving items
+      else if(!frame.isSyncFrame) {
+        STATS_CNT_RATE_EVENT(&frameRate);
+
+        deckHealthCheck(&lighthouseCoreState, &frame, now_ms);
+        if (pulseProcessorProcessPulse) {
+          processFrame(&lighthouseCoreState, &angles, &frame);
+        } else {
+          pulseProcessorProcessPulse = identifySystem(&frame, &bsIdentificationData);
+        }
       }
 
-      isUartFrameValid = getUartFrame(&frame);
+      previousWasSyncFrame = frame.isSyncFrame;
+
+      updateSystemStatus(now_ms);
     }
 
     uartSynchronized = false;
   }
 }
 
+void lighthouseCoreSetCalibrationData(const uint8_t baseStation, const lighthouseCalibration_t* calibration) {
+  if (baseStation < PULSE_PROCESSOR_N_BASE_STATIONS) {
+    lighthouseCoreState.bsCalibration[baseStation] = *calibration;
+    lighthousePositionCalibrationDataWritten(baseStation);
+  }
+}
+
+static uint8_t pulseProcessorAnglesQualityLogger(uint32_t timestamp, void* ignored) {
+  return pulseProcessorAnglesQuality();
+}
+static logByFunction_t pulseProcessorAnglesQualityLoggerDef = {.acquireUInt8 = pulseProcessorAnglesQualityLogger, .data = 0};
+
 LOG_GROUP_START(lighthouse)
+LOG_ADD_BY_FUNCTION(LOG_UINT8, validAngles, &pulseProcessorAnglesQualityLoggerDef)
+
 LOG_ADD(LOG_FLOAT, rawAngle0x, &angles.sensorMeasurementsLh1[0].baseStatonMeasurements[0].angles[0])
 LOG_ADD(LOG_FLOAT, rawAngle0y, &angles.sensorMeasurementsLh1[0].baseStatonMeasurements[0].angles[1])
 LOG_ADD(LOG_FLOAT, rawAngle1x, &angles.sensorMeasurementsLh1[0].baseStatonMeasurements[1].angles[0])
@@ -360,6 +554,11 @@ LOG_ADD(LOG_FLOAT, rawAngle0ylh2, &angles.sensorMeasurementsLh2[0].baseStatonMea
 LOG_ADD(LOG_FLOAT, rawAngle1xlh2, &angles.sensorMeasurementsLh2[0].baseStatonMeasurements[1].angles[0])
 LOG_ADD(LOG_FLOAT, rawAngle1ylh2, &angles.sensorMeasurementsLh2[0].baseStatonMeasurements[1].angles[1])
 
+LOG_ADD(LOG_FLOAT, angle0x_0lh2, &angles.sensorMeasurementsLh2[0].baseStatonMeasurements[0].correctedAngles[0])
+LOG_ADD(LOG_FLOAT, angle0y_0lh2, &angles.sensorMeasurementsLh2[0].baseStatonMeasurements[0].correctedAngles[1])
+LOG_ADD(LOG_FLOAT, angle1x_0lh2, &angles.sensorMeasurementsLh2[0].baseStatonMeasurements[1].correctedAngles[0])
+LOG_ADD(LOG_FLOAT, angle1y_0lh2, &angles.sensorMeasurementsLh2[0].baseStatonMeasurements[1].correctedAngles[1])
+
 STATS_CNT_RATE_LOG_ADD(serRt, &serialFrameRate)
 STATS_CNT_RATE_LOG_ADD(frmRt, &frameRate)
 STATS_CNT_RATE_LOG_ADD(cycleRt, &cycleRate)
@@ -373,8 +572,16 @@ LOG_ADD(LOG_UINT16, width2, &pulseWidth[2])
 LOG_ADD(LOG_UINT16, width3, &pulseWidth[3])
 
 LOG_ADD(LOG_UINT8, comSync, &uartSynchronized)
+
+LOG_ADD(LOG_UINT16, bsReceive, &baseStationReceivedMap)
+LOG_ADD(LOG_UINT16, bsActive, &baseStationActiveMap)
+LOG_ADD(LOG_UINT16, bsCalUd, &baseStationCalibUpdatedMap)
+LOG_ADD(LOG_UINT16, bsCalCon, &baseStationCalibConfirmedMap)
+
+LOG_ADD(LOG_UINT8, status, &systemStatus)
 LOG_GROUP_STOP(lighthouse)
 
 PARAM_GROUP_START(lighthouse)
 PARAM_ADD(PARAM_UINT8, method, &estimationMethod)
+PARAM_ADD(PARAM_UINT8, bsCalibReset, &calibStatusReset)
 PARAM_GROUP_STOP(lighthouse)

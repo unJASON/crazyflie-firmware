@@ -4,7 +4,6 @@
     - {page_id: build_instructions}
     - {page_id: build_config}
     - {page_id: flashing}
-    - {page_id: dfu}
 - title: Userguides
   subs:
     - {page_id: deck}
@@ -13,12 +12,14 @@
     - {page_id: app_layer}
 - title: Functional areas
   subs:
-    - {page_id: ctrp_index}
+    - {page_id: crtp_index}
+    - {page_id: memory_subsystem}
     - {page_id: stabilizer_index}
     - {page_id: deck_memory_format}
     - {page_id: p2p_api}
     - {page_id: trajectory_formats}
-    - {page_id: lighthouse_overview}
+    - {page_id: lh_overview}
+    - {page_id: persistent_storage}
 - title: Development Instructions
   subs:
     - {page_id: starting_development}
@@ -28,3 +29,4 @@
     - {page_id: unit_testing}
     - {page_id: systemtask}
     - {page_id: memory_management}
+    - {page_id: dfu}

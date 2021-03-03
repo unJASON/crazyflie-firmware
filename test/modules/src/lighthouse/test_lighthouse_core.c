@@ -8,8 +8,12 @@
 #include "mock_pulse_processor_v2.h"
 #include "mock_lighthouse_deck_flasher.h"
 #include "mock_lighthouse_position_est.h"
+#include "mock_lighthouse_calibration.h"
 #include "mock_uart1.h"
 #include "mock_statsCnt.h"
+#include "mock_cfassert.h"
+#include "mock_crtp_localization_service.h"
+#include "mock_lighthouse_storage.h"
 
 #include <stdbool.h>
 
@@ -20,10 +24,22 @@ static char* uart1Sequence;
 static int uart1SequenceLength;
 static lighthouseUartFrame_t frame;
 
-// Dummy mock
+extern pulseProcessor_t lighthouseCoreState;
+
+// Functions under test
+void waitForUartSynchFrame();
+bool getUartFrameRaw(lighthouseUartFrame_t *frame);
+lighthouseBaseStationType_t identifyBaseStationType(const lighthouseUartFrame_t* frame, lighthouseBsIdentificationData_t* state);
+
+// Dummy mocks timer
 uint32_t xTaskGetTickCount() {return 0;}
+void vTaskDelay(const uint32_t ignore) {}
+
+static int nrOfCallsToStorageFetchForCalib = 0;
+static size_t mockStorageFetchForCalib(char* key, void* buffer, size_t length, int cmock_num_calls);
 
 void setUp(void) {
+    nrOfCallsToStorageFetchForCalib = 0;
     uart1SetSequence(emptySequence, 0);
 
     memset(&frame, 0, sizeof(frame));
@@ -57,12 +73,14 @@ void testThatUartSyncFramesAreSkipped() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  bool actual = getUartFrame(&frame);
+  do {
+    bool actual = getUartFrameRaw(&frame);
+    TEST_ASSERT_TRUE(actual);
+  } while(frame.isSyncFrame);
 
   // Assert
   int actualRead = uart1BytesRead;
   TEST_ASSERT_EQUAL(expectedRead, actualRead);
-  TEST_ASSERT_TRUE(actual);
 }
 
 
@@ -72,7 +90,7 @@ void testThatCorruptUartFramesAreDetectedWithOnesInFirstPadding() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  bool actual = getUartFrame(&frame);
+  bool actual = getUartFrameRaw(&frame);
 
   // Assert
   TEST_ASSERT_FALSE(actual);
@@ -85,7 +103,7 @@ void testThatCorruptUartFramesAreDetectedWithOnesInSecondPadding() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  bool actual = getUartFrame(&frame);
+  bool actual = getUartFrameRaw(&frame);
 
   // Assert
   TEST_ASSERT_FALSE(actual);
@@ -99,7 +117,7 @@ void testThatTimeStampIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  getUartFrame(&frame);
+  getUartFrameRaw(&frame);
 
   // Assert
   uint32_t actual = frame.data.timestamp;
@@ -114,7 +132,7 @@ void testThatWidthIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  getUartFrame(&frame);
+  getUartFrameRaw(&frame);
 
   // Assert
   uint32_t actual = frame.data.width;
@@ -131,7 +149,7 @@ void testThatOffsetIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  bool frameOk = getUartFrame(&frame);
+  bool frameOk = getUartFrameRaw(&frame);
 
   // Assert
   uint32_t actual = frame.data.offset;
@@ -149,7 +167,7 @@ void testThatBeamDataIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  bool frameOk = getUartFrame(&frame);
+  bool frameOk = getUartFrameRaw(&frame);
 
   // Assert
   uint32_t actual = frame.data.beamData;
@@ -166,7 +184,7 @@ void testThatSensorIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  getUartFrame(&frame);
+  getUartFrameRaw(&frame);
 
   // Assert
   uint32_t actual = frame.data.sensor;
@@ -182,7 +200,7 @@ void testThatLackOfChannelIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  getUartFrame(&frame);
+  getUartFrameRaw(&frame);
 
   // Assert
   TEST_ASSERT_FALSE(frame.data.channelFound);
@@ -200,7 +218,7 @@ void testThatChannelIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  getUartFrame(&frame);
+  getUartFrameRaw(&frame);
 
   // Assert
   TEST_ASSERT_EQUAL_UINT8(expected, frame.data.channel);
@@ -218,7 +236,7 @@ void testThatSlowBitIsDecodedInUartFrame() {
   uart1SetSequence(sequence, sizeof(sequence));
 
   // Test
-  getUartFrame(&frame);
+  getUartFrameRaw(&frame);
 
   // Assert
   TEST_ASSERT_TRUE(frame.data.slowbit);
@@ -279,7 +297,6 @@ void testThatBaseStationIdentificationFindsV2() {
   // Assert
   TEST_ASSERT_EQUAL(expected, actual);
 }
-
 
 // Test support ----------------------------------------------------------------------------------------------------
 

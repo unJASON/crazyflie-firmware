@@ -3,7 +3,7 @@
 
 #include "locodeck.h"
 #include "libdw1000.h"
-
+#include "pos_localization.h"
 #include "mac.h"
 
 #define LPS_P2M_POLL 0x01   // Poll is initiated by the tag
@@ -39,8 +39,13 @@ typedef struct{
 typedef struct {
   uint8_t group_num;
   uint16_t idx; //index of transmission
+  float x;
+  float y;
+  float z;
+  float cov_xx; //covariance of x
+  float cov_yy; //covariance of y
   dwTime_t last_transmission_time;  // last transmission timestamp
-  Agent_info received_group[GROUP_SIZE]; //group member
+  Agent_info received_group[GROUP_SIZE-3]; //group member
 } __attribute__((packed)) lpsp2mUNIPayload_t;
 
 typedef struct{
@@ -55,5 +60,6 @@ typedef struct{
 
 #define MAX_UWB_RECEIVE_TIMEOUT 65 //65ms is max interval
 void startTransmitTimer(dwDevice_t *dev);
-
+void getpositionInfo(position_state *ps, bool *refresh_flag,int ps_num);//get position info for localization
+uint8_t getmy_idx();
 #endif // __UWB_P2M_DIST_H__

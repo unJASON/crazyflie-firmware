@@ -11,8 +11,7 @@
 #include "timers.h"
 #include <stdlib.h>
 #include "locdeck_antenna_delay.h"
-
-//for auto flying
+#include "pos_localization.h"
 #include "deck.h"
 #include "system.h"
 #include "commander.h"
@@ -34,6 +33,18 @@ static dwTime_t final_rx;
 
 static int agent_countdown[NUM_UAV]={0,0,0,0,0,0,0,0,0,0}; //countdown for transmitting
 static float distances[NUM_UAV]={10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0};
+static SemaphoreHandle_t positionSemaphore;
+static float positions[3][NUM_UAV]={
+                                    {0,0,0,0,0,0,0,0,0,0},
+                                    {0,0,0,0,0,0,0,0,0,0},
+                                    {0,0,0,0,0,0,0,0,0,0}
+                                    };
+static float positions_cov[2][NUM_UAV]={
+                                    {10,10,10,10,10,10,10,10,10,10},
+                                    {10,10,10,10,10,10,10,10,10,10}
+                                    };
+static bool refresh[NUM_UAV]={false,false,false,false,false,false,false,false,false,false};
+
 static locoAddress_t fullAddress[NUM_UAV]={
   0xbccf000000000000|24,0xbccf000000000000|28,0xbccf000000000000|33,
   0xbccf000000000000|37,0xbccf000000000000|1,0xbccf000000000000|2,
@@ -61,10 +72,46 @@ static agent_cache new_cache[NUM_UAV];  // stores the received information
 
 static SemaphoreHandle_t visitSemaphore;
 static Agent_info  received_agent[NUM_UAV];  //stores the information received from others
+
+void getpositionInfo(position_state *ps,bool *refresh_flag,int ps_num){
+  while (true)
+  {
+    if( xSemaphoreTake(positionSemaphore, portMAX_DELAY)) {
+        break;
+    }
+  }
+  for (uint8_t i = 0;i< ps_num ;i++){
+    if (i != my_addr_idx){
+      //get neighbor position
+      ps[i].x = positions[0][i];
+      ps[i].y = positions[1][i];
+      ps[i].z = positions[2][i];
+      ps[i].P[0][0] = positions_cov[0][i];
+      ps[i].P[1][1] = positions_cov[1][i];
+      ps[i].distance=distances[i];
+      refresh_flag[i] = refresh[i];
+      //reset flag
+      refresh[i] = false;
+      // DEBUG_PRINT("%d : %f %f %f\n",i,(double)positions[0][i],(double)positions[1][i],(double)positions[2][i]);
+    }else{
+      // set my position for broadcast
+      positions[0][i] = ps[i].x;
+      positions[1][i] = ps[i].y;
+      positions[2][i] = ps[i].z;
+      positions_cov[0][i] = ps[i].P[0][0];
+      positions_cov[1][i] = ps[i].P[1][1];
+    }
+  }
+  xSemaphoreGive(positionSemaphore);
+};
+uint8_t getmy_idx(){
+  return my_addr_idx;
+}
+
 //建立一个映射关系，知道地址，去逻辑下标
 static int findIndex(locoAddress_t find)
 {
-  
+
   for(int i=0;i<NUM_UAV;i++)
     if(fullAddress[i]==find) 
       return i;
@@ -85,7 +132,7 @@ static int64_t temp,temp_end,temp_start;
 static int64_t difference1,difference2;      //difference
 static Agent_info agent;
 static int64_t tround1,treply1,treply2,tround2;
-static double tprop;
+static float tprop;
 static int64_t tprop_ctn;
 static int check_index;
 static int i;
@@ -107,6 +154,12 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   }
 
   // accessing critical resource
+   while (true)
+  {
+    if( xSemaphoreTake(positionSemaphore, portMAX_DELAY)) {
+        break;
+    }
+  }
   while (true){
     if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
         break;
@@ -125,6 +178,7 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
     // dwSetDefaults(dev);
     dwStartReceive(dev);
     xSemaphoreGive(visitSemaphore);
+    xSemaphoreGive(positionSemaphore);
     return timeout_p2m;
   }
   isVisit[cache_index] = true;    //set the visit flag, semaphore is required in the future.
@@ -198,7 +252,13 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
               // tprop = tprop_ctn/LOCODECK_TS_FREQ;
               // distances[cache_index] = SPEED_OF_LIGHT * tprop;
               tprop = tprop_ctn *(0.004691);
-              distances[cache_index] = tprop;
+              distances[cache_index] = distances[cache_index]*0.6f+tprop*0.4f;
+              positions[0][cache_index]=report->x;
+              positions[1][cache_index]=report->y;
+              positions[2][cache_index]=report->z;
+              positions_cov[0][cache_index]=report->cov_xx;
+              positions_cov[1][cache_index]=report->cov_yy;
+              refresh[cache_index]=true;
           }else{
               // impossible situation
               // distances[cache_index] = -0.1;
@@ -228,7 +288,8 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
   dwStartReceive(dev);
   // release semaphore
   xSemaphoreGive(visitSemaphore);
-    return timeout_p2m;
+  xSemaphoreGive(positionSemaphore);
+  return timeout_p2m;
 }
 
 
@@ -238,8 +299,8 @@ static uint32_t rxcallback(dwDevice_t *dev)   //收到报文的回调函数
 static TimerHandle_t Transmit_timer_handle = NULL;
 static dwDevice_t *dev_timer;
 static int chosen_group[GROUP_SIZE]={-1,-1,-1,-1,-1,-1,-1,-1};
-static int const_p[NUM_UAV] = {15,15,15,15,15,15,15,15,15,15};
-static int rand_p[NUM_UAV]={21,21,21,21,81,81,81,81,81,81};
+static int const_p[NUM_UAV] = {20,20,20,20,15,15,15,15,15,15};
+static int rand_p[NUM_UAV]={11,11,11,11,81,81,81,81,81,81};
 uint8_t swap = 0,tmp = 0;
 // ************runTransmit()***************
 static void runTransmit(){
@@ -252,10 +313,18 @@ static void runTransmit(){
   uint8_t len = 0;
   // accessing critical resource
   while (true){
+    if( xSemaphoreTake(positionSemaphore, portMAX_DELAY)) {
+        break;
+    }
+  }
+
+  while (true){
     if( xSemaphoreTake(visitSemaphore, portMAX_DELAY)) {
         break;
     }
   }
+  
+
   //choose minimun top K
   uint8_t taken = 0;
   for(uint8_t i = 0; i < NUM_UAV; i++){
@@ -292,6 +361,13 @@ static void runTransmit(){
     }
   }
   report->group_num = len;
+  //add position
+  report->x = positions[0][my_addr_idx];
+  report->y = positions[1][my_addr_idx];
+  report->z = positions[2][my_addr_idx];
+  report->cov_xx=positions_cov[0][my_addr_idx];
+  report->cov_yy=positions_cov[1][my_addr_idx];
+
   xTimerChangePeriod(Transmit_timer_handle,M2T(period),10000);
   dwNewTransmit(dev_timer);
   // dwSetDefaults(dev_timer);
@@ -299,6 +375,7 @@ static void runTransmit(){
   dwWaitForResponse(dev_timer, true);
   dwStartTransmit(dev_timer);
   xSemaphoreGive(visitSemaphore);
+  xSemaphoreGive(positionSemaphore);
   // *****************************
 }
 
@@ -306,6 +383,7 @@ static void runTransmit(){
 void startTransmitTimer(dwDevice_t *dev){
   // create a binary semaphore for lock.
   vSemaphoreCreateBinary(visitSemaphore);
+  vSemaphoreCreateBinary(positionSemaphore);
   if (visitSemaphore == NULL){
     FAIL_PRINT("semaphore create fail\n");
   }

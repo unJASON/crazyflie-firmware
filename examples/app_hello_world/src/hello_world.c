@@ -37,15 +37,84 @@
 #include "task.h"
 
 #include "debug.h"
+#include "pos_localization.h"
+
+#include "commander.h"
 
 #define DEBUG_MODULE "HELLOWORLD"
 
+static setpoint_t setpoint;
+
+void setHoverSetpoint(setpoint_t *setpoint, float vx, float vy,float vz, float z, float yawrate)
+{
+  setpoint->mode.z = modeAbs;
+  setpoint->position.z = z;
+
+
+  setpoint->mode.yaw = modeVelocity;
+  setpoint->attitudeRate.yaw = yawrate;
+
+
+  setpoint->mode.x = modeVelocity;
+  setpoint->mode.y = modeVelocity;
+  setpoint->velocity.x = vx;
+  setpoint->velocity.y = vy;
+  setpoint->velocity.z = vz;
+  setpoint->velocity_body = true;
+}
+
+
+//take off for better performance
+void takeoff(float height){
+  float tmp = 0.0f;
+  while (true)
+  {
+    if (tmp+0.4f>=height){
+      break;
+    }else{
+      tmp = tmp + 0.4f;
+      setHoverSetpoint(&setpoint,0.0,0.0,0.0,0.2,tmp);
+      commanderSetSetpoint(&setpoint,3);
+      vTaskDelay(M2T(200));
+    }
+  }
+  
+  setHoverSetpoint(&setpoint,0.0,0.0,0.0,0.2,height);
+  commanderSetSetpoint(&setpoint,3);
+  vTaskDelay(M2T(200));
+}
+
+
+void land(){
+  
+}
 void appMain()
 {
   DEBUG_PRINT("Waiting for activation ...\n");
 
-  while(1) {
-    vTaskDelay(M2T(2000));
-    DEBUG_PRINT("Hello World!\n");
+  // initiate EKF
+  uint8_t addr=initLocalization();
+  // float height = 0.4f;
+  // fly path
+  // stage 1 : converge stage
+  vTaskDelay(M2T(5000));
+  if (addr == 1){
+    
+    // takeoff(height);
+    // start the task after take off
+    xTaskCreate(localizationTask,"Localization",3*configMINIMAL_STACK_SIZE, NULL,ZRANGER_TASK_PRI,NULL );
+    // for(int i=0;i<1000;i++){
+    //   setHoverSetpoint(&setpoint,0.0f,0.0f,0.2f,height,0.0f);
+    //   commanderSetSetpoint(&setpoint,3);
+    //   vTaskDelay(M2T(200));
+    // }
+    // fly repeatedly
+    
+    // DEBUG_PRINT("%d\n",addr);
+  }else{
+    // do nothiong
+    xTaskCreate(localizationTask,"Localization",3*configMINIMAL_STACK_SIZE, NULL,ZRANGER_TASK_PRI,NULL );
   }
+    
 }
+

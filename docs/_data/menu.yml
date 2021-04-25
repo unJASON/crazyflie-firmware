@@ -1,14 +1,13 @@
 - page_id: home
 - title: Building and Flashing
   subs:
-    - {page_id: build_instructions}
-    - {page_id: build_config}
-    - {page_id: flashing}
+    - {page_id: build}
 - title: Userguides
   subs:
     - {page_id: deck}
     - {page_id: decks-index}
     - {page_id: logparam}
+    - {page_id: eventtrigger}
     - {page_id: app_layer}
 - title: Functional areas
   subs:

@@ -95,7 +95,6 @@ typedef struct {
 } pulseProcessorFrame_t;
 
 typedef enum {
-    lighthouseBsTypeUnknown = 0,
     lighthouseBsTypeV1 = 1,
     lighthouseBsTypeV2 = 2,
 } lighthouseBaseStationType_t;
@@ -228,6 +227,11 @@ typedef struct pulseProcessor_s {
   uint32_t healthFirstSensorTs;
   uint8_t healthSensorBitField;
   bool healthDetermined;
+
+  // A bitmap indicating which base stations that has valid geo data
+  uint16_t baseStationGeoValidMap;
+  // A bitmap indicating which base stations that have valid calibration data
+  uint16_t baseStationCalibValidMap;
 } pulseProcessor_t;
 
 typedef struct {
@@ -244,6 +248,7 @@ typedef struct {
   pulseProcessorSensorMeasurement_t sensorMeasurementsLh1[PULSE_PROCESSOR_N_SENSORS];
   pulseProcessorSensorMeasurement_t sensorMeasurementsLh2[PULSE_PROCESSOR_N_SENSORS];
   lighthouseBaseStationType_t measurementType;
+  uint64_t lastUsecTimestamp[PULSE_PROCESSOR_N_BASE_STATIONS];
 } pulseProcessorResult_t;
 
 /**

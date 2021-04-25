@@ -972,9 +972,10 @@ logVarId_t logGetVarId(char* group, char* name)
   for(i=0; i<logsLen; i++)
   {
     if (logs[i].type & LOG_GROUP) {
-      if (logs[i].type & LOG_START)
+      if (logs[i].type & LOG_START) {
         currgroup = logs[i].name;
-    } if ((!strcmp(group, currgroup)) && (!strcmp(name, logs[i].name))) {
+      }
+    } else if ((!strcmp(group, currgroup)) && (!strcmp(name, logs[i].name))) {
       varId = (logVarId_t)i;
       return varId;
     }
@@ -1023,7 +1024,7 @@ int logGetInt(logVarId_t varid)
 {
   int valuei = 0;
 
-  ASSERT(LOG_VARID_IS_VALID(varid));
+  ASSERT(logVarIdIsValid(varid));
 
   switch(logs[varid].type)
   {
@@ -1055,7 +1056,7 @@ int logGetInt(logVarId_t varid)
 
 float logGetFloat(logVarId_t varid)
 {
-  ASSERT(LOG_VARID_IS_VALID(varid));
+  ASSERT(logVarIdIsValid(varid));
 
   if (logs[varid].type == LOG_FLOAT)
     return *(float *)logs[varid].address;

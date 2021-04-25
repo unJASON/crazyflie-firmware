@@ -34,28 +34,32 @@
 #include "log.h"
 #include "param.h"
 #include "debug.h"
+#include "motors.h"
+#include "pm.h"
 
 #include "stabilizer.h"
 
 #include "sensors.h"
 #include "commander.h"
 #include "crtp_localization_service.h"
-#include "sitaw.h"
 #include "controller.h"
 #include "power_distribution.h"
+#include "collision_avoidance.h"
 #include "health.h"
+#include "supervisor.h"
 
 #include "estimator.h"
 #include "usddeck.h"
 #include "quatcompress.h"
 #include "statsCnt.h"
 #include "static_mem.h"
+#include "rateSupervisor.h"
 
 static bool isInit;
 static bool emergencyStop = false;
 static int emergencyStopTimeout = EMERGENCY_STOP_TIMEOUT_DISABLED;
 
-uint32_t inToOutLatency;
+static uint32_t inToOutLatency;
 
 // State variables for the stabilizer
 static setpoint_t setpoint;
@@ -67,6 +71,8 @@ static StateEstimatorType estimatorType;
 static ControllerType controllerType;
 
 static STATS_CNT_RATE_DEFINE(stabilizerRate, 500);
+static rateSupervisor_t rateSupervisorContext;
+static bool rateWarningDisplayed = false;
 
 static struct {
   // position - mm
@@ -165,7 +171,7 @@ void stabilizerInit(StateEstimatorType estimator)
   stateEstimatorInit(estimator);
   controllerInit(ControllerTypeAny);
   powerDistributionInit();
-  sitAwInit();
+  collisionAvoidanceInit();
   estimatorType = getStateEstimator();
   controllerType = getControllerType();
 
@@ -182,6 +188,7 @@ bool stabilizerTest(void)
   pass &= stateEstimatorTest();
   pass &= controllerTest();
   pass &= powerDistributionTest();
+  pass &= collisionAvoidanceTest();
 
   return pass;
 }
@@ -214,22 +221,25 @@ static void stabilizerTask(void* param)
   DEBUG_PRINT("Wait for sensor calibration...\n");
 
   // Wait for sensors to be calibrated
-  lastWakeTime = xTaskGetTickCount ();
+  lastWakeTime = xTaskGetTickCount();
   while(!sensorsAreCalibrated()) {
     vTaskDelayUntil(&lastWakeTime, F2T(RATE_MAIN_LOOP));
   }
   // Initialize tick to something else then 0
   tick = 1;
 
+  rateSupervisorInit(&rateSupervisorContext, xTaskGetTickCount(), M2T(1000), 997, 1003, 1);
+
   DEBUG_PRINT("Ready to fly.\n");
 
   while(1) {
     // The sensor should unlock at 1kHz
     sensorsWaitDataReady();
+    
+    // update sensorData struct (for logging variables)
+    sensorsAcquire(&sensorData, tick);
 
-    if (healthShallWeRunTest())
-    {
-      sensorsAcquire(&sensorData, tick);
+    if (healthShallWeRunTest()) {
       healthRunTests(&sensorData);
     } else {
       // allow to update estimator dynamically
@@ -243,19 +253,25 @@ static void stabilizerTask(void* param)
         controllerType = getControllerType();
       }
 
-      stateEstimator(&state, &sensorData, &control, tick);
+      stateEstimator(&state, tick);
       compressState();
 
       commanderGetSetpoint(&setpoint, &state);
       compressSetpoint();
 
-      sitAwUpdateSetpoint(&setpoint, &sensorData, &state);
+      collisionAvoidanceUpdateSetpoint(&setpoint, &sensorData, &state, tick);
 
       controller(&control, &setpoint, &sensorData, &state, tick);
 
       checkEmergencyStopTimeout();
 
-      if (emergencyStop) {
+      //
+      // The supervisor module keeps track of Crazyflie state such as if
+      // we are ok to fly, or if the Crazyflie is in flight.
+      //
+      supervisorUpdate(&sensorData);
+
+      if (emergencyStop || (systemIsArmed() == false)) {
         powerStop();
       } else {
         powerDistribution(&control);
@@ -271,6 +287,13 @@ static void stabilizerTask(void* param)
     calcSensorToOutputLatency(&sensorData);
     tick++;
     STATS_CNT_RATE_EVENT(&stabilizerRate);
+
+    if (!rateSupervisorValidate(&rateSupervisorContext, xTaskGetTickCount())) {
+      if (!rateWarningDisplayed) {
+        DEBUG_PRINT("WARNING: stabilizer loop rate is off (%lu)\n", rateSupervisorLatestCount(&rateSupervisorContext));
+        rateWarningDisplayed = true;
+      }
+    }
   }
 }
 

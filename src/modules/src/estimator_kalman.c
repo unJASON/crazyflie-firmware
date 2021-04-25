@@ -293,44 +293,6 @@ void estimatorKalman(state_t *state, const uint32_t tick)
   // as quickly as possible. The dataMutex must only be locked short periods by the task.
   xSemaphoreTake(dataMutex, portMAX_DELAY);
 
-<<<<<<< HEAD
-  // Average the last IMU measurements. We do this because the prediction loop is
-  // slower than the IMU loop, but the IMU information is required externally at
-  // a higher rate (for body rate control).
-  if (sensorsReadAcc(&sensors->acc)) {
-    accAccumulator.x += sensors->acc.x;
-    accAccumulator.y += sensors->acc.y;
-    accAccumulator.z += sensors->acc.z;
-    accAccumulatorCount++;
-  }
-
-  if (sensorsReadGyro(&sensors->gyro)) {
-    gyroAccumulator.x += sensors->gyro.x;
-    gyroAccumulator.y += sensors->gyro.y;
-    gyroAccumulator.z += sensors->gyro.z;
-    gyroAccumulatorCount++;
-  }
-
-  
-
-  // Average the thrust command from the last time steps, generated externally by the controller
-  thrustAccumulator += control->thrust;
-  thrustAccumulatorCount++;
-
-  // Average barometer data
-  if (useBaroUpdate) {
-    if (sensorsReadBaro(&sensors->baro)) {
-      baroAslAccumulator += sensors->baro.asl;
-      baroAccumulatorCount++;
-    }
-  }
-
-  // Make a copy of sensor data to be used by the task
-  memcpy(&gyroSnapshot, &sensors->gyro, sizeof(gyroSnapshot));
-  memcpy(&accSnapshot, &sensors->acc, sizeof(accSnapshot));
-
-=======
->>>>>>> a91d76daa59df8b32dc9e07835e47417532c8a03
   // Copy the latest state, calculated by the task
   memcpy(state, &taskEstimatorState, sizeof(state_t));
   xSemaphoreGive(dataMutex);
